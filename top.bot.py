@@ -39,7 +39,7 @@ PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = r
 
 # --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
-OPENROUTER_API_KEY = os.environ.get("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", "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")
+OPENROUTER_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین
 try:
@@ -49,7 +49,7 @@ except ValueError:
 
 # --- ثابت‌های API ---
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-# مدل پیش‌فرض برای ساخت پرامپت
+# مدل پیش‌فرض برای ساخت پرامپت (می‌توانید به مدل‌های دیگری مثل gpt-4o تغییر دهید)
 OPENROUTER_MODEL_TEXT = "x-ai/grok-4-fast" 
 SITE_URL = "https://t.me/jalil_jabari" 
 SITE_TITLE = "Jprompts Bot" 
@@ -64,6 +64,7 @@ DEVELOPER_TEXT = "توسعه‌دهنده: "
 ADMIN_COUNT_BUTTON_TEXT = "📊 شمارش اعضا" 
 PROMPT_ASSISTANT_BUTTON = "🤖 شروع دستیار پرامپ‌نویسی"
 
+# کیبورد اصلی
 MAIN_MENU_KEYBOARD = [
     [KeyboardButton(PROMPT_ASSISTANT_BUTTON)], 
 ]
@@ -226,7 +227,7 @@ async def handle_first_input(update: Update, context: CallbackContext) -> int:
     text = update.message.text
     
     if text == PROMPT_ASSISTANT_BUTTON:
-        # **توجه:** ReplyKeyboardMarkup را حذف می‌کنیم تا فقط ورودی متنی انتظار رود
+        # پاک کردن کیبورد و شروع سوال ۱
         context.user_data['prompt_data'] = {}
         message = (
             "**دستیار پرامپ‌نویسی (۵ سوال)**\n"
@@ -234,6 +235,7 @@ async def handle_first_input(update: Update, context: CallbackContext) -> int:
             "**سوال ۱ از ۵: پرسونا (Persona) 🎭**\n"
             "هوش مصنوعی باید چه نقشی را ایفا کند؟ (مثلاً یک متخصص سئو، یک شاعر، یک برنامه‌نویس پایتون)"
         )
+        # reply_markup=None کیبورد قبلی را پنهان می‌کند (اما به دلیل ConversationHandler باید بازگردد)
         await update.message.reply_text(message, reply_markup=None) 
         # حالت بعدی برای دریافت پاسخ سوال ۱
         return MISSION 
