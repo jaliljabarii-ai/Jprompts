@@ -14,7 +14,9 @@ import os
 import httpx 
 import json
 
-# تنظیمات لاگینگ
+# ==============================================================================
+# --- تنظیمات لاگینگ ---
+# ==============================================================================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO
 )
@@ -24,6 +26,7 @@ logging.basicConfig(
 # ==============================================================================
 PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = range(6)
 MENU_CHOICE = 6
+IMAGE_PROMPT = 7 # حالت جدید برای قابلیت تشخیص تصویر
 
 # ==============================================================================
 # --- ۲. تنظیمات و کلیدهای API (مناسب برای محیط ابری/Render) ---
@@ -31,10 +34,9 @@ MENU_CHOICE = 6
 
 # --- کلیدهای محیطی (Render باید این متغیرها را تامین کند) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
-OPENROUTER_API_KEY = os.environ.get("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", "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")
+OPENROUTER_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین (Admin Chat ID)
-# این را به صورت عددی در Render در متغیر محیطی ADMIN_CHAT_ID_RAW تنظیم کنید
 try:
     ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID_RAW", 0))
 except ValueError:
@@ -42,7 +44,11 @@ except ValueError:
 
 # --- ثابت‌های API ---
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL = "x-ai/grok-4-fast" 
+# مدل پیش‌فرض برای ساخت پرامپت (متنی)
+OPENROUTER_MODEL_TEXT = "x-ai/grok-4-fast" 
+# مدل پیش‌فرض برای تحلیل تصویر (باید چندرسانه‌ای باشد)
+# از Llama 4 Maverick که در کد قبلی شما بود، استفاده می‌کنیم
+OPENROUTER_MODEL_IMAGE = "meta-llama/llama-4-maverick:free" 
 SITE_URL = "https://t.me/jalil_jabari" 
 SITE_TITLE = "Jprompts Bot" 
 
@@ -55,24 +61,28 @@ DEVELOPER_USERNAME = "@jalil_jabari"
 DEVELOPER_TEXT = "توسعه‌دهنده: "
 
 # تعریف ثابت‌های متن دکمه‌ها
-PROMPT_ASSISTANT_BUTTON = "🤖 دستیار پرامپ‌نویسی"
+PROMPT_ASSISTANT_BUTTON = "🤖 دستیار پرامپ‌نویسی (متن)"
+IMAGE_ANALYSIS_BUTTON = "🖼️ تحلیل تصویر"
 ADMIN_COUNT_BUTTON_TEXT = "📊 شمارش اعضا" # کلید ادمین
 
 
-# حذف سایر دکمه‌ها
 MAIN_MENU_KEYBOARD = [
     [KeyboardButton(PROMPT_ASSISTANT_BUTTON)], 
+    [KeyboardButton(IMAGE_ANALYSIS_BUTTON)],
 ]
-MAIN_MENU_MARKUP = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, one_time_keyboard=True, resize_keyboard=True)
+MAIN_MENU_MARKUP = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, one_time_keyboard=False, resize_keyboard=True)
+# one_time_keyboard=False برای ماندگاری دکمه‌های اصلی
 
 
 # ==============================================================================
 # --- ۳. توابع هسته هوش مصنوعی (AI Core) ---
 # ==============================================================================
 
-async def call_ai_api(prompt: str, api_key: str, model_name: str = OPENROUTER_MODEL) -> str:
+async def call_ai_api(messages: list, api_key: str, model_name: str, context: CallbackContext) -> str:
     """
-    فراخوانی واقعی API هوش مصنوعی (OpenRouter/Grok-4) با استفاده از httpx.
+    فراخوانی واقعی API هوش مصنوعی (OpenRouter) با استفاده از httpx.
+    این تابع برای پشتیبانی از Multimodal به روز رسانی شده است.
+    ورودی 'messages' اکنون یک لیست است (نه یک رشته پرامپت ساده).
     """
     if api_key == "MISSING_OPENROUTER_KEY": 
         # شبیه‌سازی پاسخ در صورت عدم مقداردهی صحیح کلید
@@ -87,22 +97,16 @@ async def call_ai_api(prompt: str, api_key: str, model_name: str = OPENROUTER_MO
     
     data = {
         "model": model_name,
-        "messages": [
-            {
-                "role": "user",
-                "content": prompt 
-            }
-        ],
-        "max_tokens": 2048
+        "messages": messages,
+        "max_tokens": 2048,
     }
 
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(
                 url=OPENROUTER_BASE_URL,
                 headers=headers,
                 json=data, 
-                timeout=60.0 # افزایش مهلت زمانی
             )
 
         response.raise_for_status() # بررسی خطاهای HTTP (مانند 4xx یا 5xx)
@@ -116,16 +120,19 @@ async def call_ai_api(prompt: str, api_key: str, model_name: str = OPENROUTER_MO
 
     except httpx.HTTPStatusError as e:
         logging.error(f"OpenRouter HTTP Error: {e}")
-        if e.response.status_code in [401, 402]:
-             return f"**خطا در API:** ارتباط با سرورهای OpenRouter برقرار نشد. (کد خطا: {e.response.status_code}). احتمالاً کلید API نامعتبر یا اعتبار حساب کم است."
-        return f"**خطا در API:** ارتباط با سرورهای OpenRouter برقرار نشد. (کد خطا: {e.response.status_code})."
+        status_code = e.response.status_code
+        if status_code in [401, 402]:
+             return f"**خطا در API:** ارتباط با سرورهای OpenRouter برقرار نشد. (کد خطا: {status_code}). احتمالاً کلید API نامعتبر یا اعتبار حساب کم است."
+        elif status_code == 400:
+             return f"**خطا در درخواست:** درخواست شما نامعتبر بود (کد خطا: {status_code}). شاید فرمت ورودی (مثل URL تصویر) اشتباه باشد."
+        return f"**خطا در API:** ارتباط با سرورهای OpenRouter برقرار نشد. (کد خطا: {status_code})."
     except Exception as e:
         logging.error(f"Unknown API Error: {e}")
         return f"**خطای ناشناخته:** در اجرای پرامپت خطایی رخ داد: {e}"
 
 
 # ==============================================================================
-# --- ۴. توابع اصلی (Start, Menu, Cancel) ---
+# --- ۴. توابع مدیریت کاربران و شروع (Start, Menu, Cancel) ---
 # ==============================================================================
 
 def get_user_count() -> int:
@@ -144,21 +151,26 @@ async def check_and_register_user(update: Update, context: CallbackContext) -> N
     
     # خواندن کاربران فعلی
     registered_users = set()
-    if os.path.exists(USER_IDS_FILE):
-        try:
+    # استفاده از ساختار try-except برای مدیریت فایل در محیط‌های ابری
+    try:
+        if os.path.exists(USER_IDS_FILE):
             with open(USER_IDS_FILE, 'r') as f:
-                # حذف خطوط خالی برای شمارش دقیق
                 registered_users = set(line.strip() for line in f if line.strip())
-        except Exception as e:
-            logging.error(f"Error reading user file: {e}")
+    except Exception as e:
+        logging.error(f"Error reading user file: {e}")
+
 
     if user_id not in registered_users:
         # کاربر جدید است: ثبت، گزارش و به‌روزرسانی شمارنده
         try:
-            with open(USER_IDS_FILE, 'a') as f:
-                f.write(f"{user_id}\n")
+            # از 'a+' استفاده می‌کنیم تا فایل اگر وجود ندارد ساخته شود و اگر دارد به انتهای آن اضافه شود
+            with open(USER_IDS_FILE, 'a+') as f:
+                # اطمینان حاصل می‌کنیم که کاربر دوباره اضافه نشود
+                if user_id not in registered_users:
+                    f.write(f"{user_id}\n")
             
-            new_count = len(registered_users) + 1
+            # شمارش مجدد کاربران
+            new_count = get_user_count()
 
             admin_message = (
                 "🔔 **کاربر جدید!**\n"
@@ -182,10 +194,7 @@ async def start(update: Update, context: CallbackContext) -> int:
     await check_and_register_user(update, context)
 
     # حذف تمام داده‌های ذخیره شده کاربر برای ریست (فوری)
-    if 'prompt_data' in context.user_data:
-        del context.user_data['prompt_data']
-    if 'final_creative_prompt' in context.user_data:
-        del context.user_data['final_creative_prompt']
+    context.user_data.clear()
 
     # ساخت کیبورد Inline (شامل دکمه مدیریت برای ادمین)
     inline_keyboard = [
@@ -203,7 +212,7 @@ async def start(update: Update, context: CallbackContext) -> int:
 
     welcome_message = (
         "سلام! به ربات خوش آمدید.\n\n"
-        "لطفاً گزینه پرامپ‌نویسی را برای شروع انتخاب کنید:"
+        "لطفاً گزینه مورد نظر را برای شروع انتخاب کنید:"
     )
 
     message_source = update.message if update.message else update.effective_message
@@ -226,12 +235,17 @@ async def handle_menu_choice(update: Update, context: CallbackContext) -> int:
 
     choice = update.message.text
 
+    # پاک کردن داده‌های مکالمه قبلی
+    context.user_data.clear()
+
     if choice == PROMPT_ASSISTANT_BUTTON:
         return await start_prompt_assistant(update, context)
         
+    elif choice == IMAGE_ANALYSIS_BUTTON:
+        return await start_image_analysis(update, context)
+
     else:
-        # اگر دکمه دیگری فشرده شد (که نباید وجود داشته باشد)
-        await update.message.reply_text("لطفاً از دکمه '🤖 دستیار پرامپ‌نویسی' استفاده کنید.")
+        await update.message.reply_text("لطفاً از دکمه‌های موجود استفاده کنید.")
         return MENU_CHOICE
 
 
@@ -239,10 +253,7 @@ async def cancel(update: Update, context: CallbackContext) -> int:
     """لغو مکالمه توسط کاربر و بازگشت به منو."""
     
     # حذف تمام داده‌های ذخیره شده کاربر
-    if 'prompt_data' in context.user_data:
-        del context.user_data['prompt_data']
-    if 'final_creative_prompt' in context.user_data:
-        del context.user_data['final_creative_prompt']
+    context.user_data.clear()
 
     await update.message.reply_text(
         'مکالمه لغو و به منوی اصلی بازگشت. برای شروع مجدد /start را ارسال کنید.',
@@ -252,8 +263,10 @@ async def cancel(update: Update, context: CallbackContext) -> int:
 
 
 # ==============================================================================
-# --- ۵. توابع دستیار پرامپ‌نویسی (۵ سوال و مرحله تأیید) ---
+# --- ۵. توابع دستیار پرامپ‌نویسی (متن) ---
 # ==============================================================================
+# توابع get_persona, get_mission, get_context, get_format_output و generate_prompt (همانند قبل)
+# ... (کد این توابع بدون تغییر در منطق اینجا قرار می‌گیرد) ...
 
 async def start_prompt_assistant(update: Update, context: CallbackContext) -> int:
     """شروع مکالمه دستیار پرامپ با سوال اول (پرسونا)."""
@@ -325,8 +338,16 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
         f"**سرفصل‌ها:**\n{persian_details}"
     )
     
-    # ذخیره پرامپت نهایی برای استفاده در مرحله تأیید
-    context.user_data['final_prompt_to_grok'] = final_prompt_to_grok
+    # ساخت پیام‌های ورودی برای call_ai_api
+    messages = [
+        {
+            "role": "user",
+            "content": final_prompt_to_grok
+        }
+    ]
+
+    # ذخیره پیام‌ها برای استفاده در مرحله تأیید
+    context.user_data['messages_to_ai'] = messages
 
     # --- ۳. نمایش گزارش و دکمه‌های تأیید ---
     await update.message.reply_text(
@@ -361,27 +382,31 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
     if query.data == 'confirm_restart':
         # پاک کردن داده‌های مکالمه فعلی دستیار پرامپ‌نویسی و بازگشت به منوی اصلی
         await query.message.edit_text("عملیات ساخت پرامپت لغو شد.")
-        if 'prompt_data' in context.user_data:
-            del context.user_data['prompt_data']
+        context.user_data.clear()
         # ریست فوری و نمایش منو
         return await start(update, context) 
 
     elif query.data == 'confirm_send':
         
-        final_prompt_to_grok = context.user_data.get('final_prompt_to_grok')
-        if not final_prompt_to_grok:
+        messages_to_ai = context.user_data.get('messages_to_ai')
+        if not messages_to_ai:
             await query.message.edit_text("خطا: پرامپت نهایی پیدا نشد. لطفاً از ابتدا شروع کنید.")
             return await start(update, context)
 
-        await query.message.edit_text("... **در حال ارسال به Grok-4/OpenRouter برای ساخت پرامپت خلاقانه** ...")
+        await query.message.edit_text(f"... **در حال ارسال به {OPENROUTER_MODEL_TEXT} برای ساخت پرامپت خلاقانه** ...")
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
         try:
             # فراخوانی تابع هسته هوش مصنوعی
-            creative_prompt_response = await call_ai_api(final_prompt_to_grok, OPENROUTER_API_KEY)
+            creative_prompt_response = await call_ai_api(
+                messages=messages_to_ai, 
+                api_key=OPENROUTER_API_KEY,
+                model_name=OPENROUTER_MODEL_TEXT,
+                context=context
+            )
             
-            # ذخیره پرامپت خلاقانه ساخته شده
-            context.user_data['final_creative_prompt'] = creative_prompt_response
+            # ذخیره پرامپت خلاقانه ساخته شده (اختیاری)
+            # context.user_data['final_creative_prompt'] = creative_prompt_response
 
             # نمایش پاسخ Grok-4 (پرامپت خلاقانه)
             await context.bot.send_message(
@@ -391,9 +416,8 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
             
             # --- بازگشت به منوی اصلی بلافاصله ---
             
-            # پاک کردن داده‌های موقت (مانند داده‌های ۵ سوال)
-            if 'prompt_data' in context.user_data:
-                del context.user_data['prompt_data']
+            # پاک کردن داده‌های موقت
+            context.user_data.clear()
             
             # نمایش منوی اصلی بلافاصله
             await context.bot.send_message(
@@ -407,7 +431,7 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
             logging.error(f"Error executing confirmed prompt: {e}")
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="متأسفانه، در ساخت پرامپت خلاقانه خطایی رخ داد. لطفاً کلید API خود را بررسی کنید.",
+                text=f"متأسفانه، در ساخت پرامپت خلاقانه خطایی رخ داد: {e}\nلطفاً کلید API خود را بررسی کنید.",
                 reply_markup=MAIN_MENU_MARKUP
             )
             return ConversationHandler.END
@@ -416,6 +440,99 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
     # پایان مکالمه دستیار پرامپ‌نویسی
     return ConversationHandler.END
 
+# ==============================================================================
+# --- ۶. توابع تحلیل تصویر (Multimodal) ---
+# ==============================================================================
+
+async def start_image_analysis(update: Update, context: CallbackContext) -> int:
+    """شروع حالت تحلیل تصویر."""
+    context.user_data.clear()
+    message = (
+        "**🖼️ تحلیل تصویر (Multimodal)**\n"
+        "برای لغو در هر زمان، /cancel را ارسال کنید.\n\n"
+        "لطفاً **تصویر** مورد نظر خود را ارسال کنید. (شما می‌توانید یک توضیح متنی نیز همراه تصویر ارسال کنید.)"
+    )
+    await update.message.reply_text(message)
+    return IMAGE_PROMPT
+
+async def analyze_image(update: Update, context: CallbackContext) -> int:
+    """دریافت تصویر و متن، ارسال به مدل Multimodal و نمایش پاسخ."""
+    
+    if not update.message.photo:
+        await update.message.reply_text("لطفاً یک **تصویر** برای تحلیل ارسال کنید.")
+        return IMAGE_PROMPT # در همین حالت می‌مانیم
+
+    # --- ۱. استخراج تصویر و متن ---
+    # دریافت بزرگ‌ترین نسخه تصویر
+    photo_file = update.message.photo[-1]
+    
+    # درخواست URL مستقیم تصویر از تلگرام
+    file = await context.bot.get_file(photo_file.file_id)
+    image_url = file.file_path 
+    
+    # دریافت متن همراه تصویر (Caption) یا متن ساده
+    user_caption = update.message.caption if update.message.caption else ""
+    user_text = update.message.text if update.message.text else user_caption
+    
+    # اگر متنی وجود ندارد، یک درخواست پیش‌فرض می‌گذاریم
+    if not user_text.strip():
+        user_text = "این تصویر را به دقت تحلیل کن و یک توضیح مفصل در مورد محتوای آن ارائه بده."
+
+    
+    # --- ۲. ساختاردهی پیام Multimodal برای OpenRouter ---
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": user_text 
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        # OpenRouter از URLهای عمومی یا Base64 پشتیبانی می‌کند.
+                        # URL فایل تلگرام پس از Get_File یک URL عمومی است.
+                        "url": image_url 
+                    }
+                }
+            ]
+        }
+    ]
+
+    chat_id = update.message.chat_id
+    await update.message.reply_text(f"... **در حال ارسال به {OPENROUTER_MODEL_IMAGE} برای تحلیل تصویر** ...")
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+
+    try:
+        # فراخوانی تابع هسته هوش مصنوعی با مدل تحلیل تصویر
+        analysis_response = await call_ai_api(
+            messages=messages, 
+            api_key=OPENROUTER_API_KEY,
+            model_name=OPENROUTER_MODEL_IMAGE,
+            context=context
+        )
+        
+        # نمایش پاسخ تحلیل تصویر
+        await update.message.reply_text(
+            f"**✅ تحلیل تصویر با استفاده از {OPENROUTER_MODEL_IMAGE}:**\n\n{analysis_response}",
+            reply_markup=MAIN_MENU_MARKUP # بازگشت به منوی اصلی
+        )
+
+    except Exception as e:
+        logging.error(f"Error executing image analysis: {e}")
+        await update.message.reply_text(
+            f"متأسفانه، در تحلیل تصویر خطایی رخ داد: {e}\nلطفاً کلید API خود را بررسی کنید.",
+            reply_markup=MAIN_MENU_MARKUP
+        )
+
+    # پایان مکالمه تحلیل تصویر
+    return ConversationHandler.END
+
+
+# ==============================================================================
+# --- ۷. توابع مدیریت ادمین ---
+# ==============================================================================
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> None:
     """مدیریت دکمه شمارش اعضا."""
@@ -440,21 +557,17 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> Non
 def main() -> None:
     """اجرای ربات."""
 
-    # بررسی برای توقف در صورت عدم مقداردهی صحیح توکن تلگرام
-    if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN_HERE":
-        print("خطا: لطفاً TELEGRAM_BOT_TOKEN را در خط مشخص شده در بخش ۲ جایگزین کنید.")
+    if TELEGRAM_BOT_TOKEN == "MISSING_TELEGRAM_TOKEN":
+        print("خطا: لطفاً متغیر محیطی 'TELEGRAM_BOT_TOKEN_RAW' را در Render تنظیم کنید.")
         return
 
-    # بررسی ادمین چت آیدی
     if ADMIN_CHAT_ID == 0:
         print("هشدار: ADMIN_CHAT_ID تنظیم نشده است. گزارش‌دهی و دکمه مدیریت کاربران فعال نخواهد شد.")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     # CallbackHandler برای مدیریت دکمه‌های Inline
-    # مدیریت دکمه‌های تأیید پرامپت
     application.add_handler(CallbackQueryHandler(handle_prompt_confirmation, pattern='^confirm_'))
-    # مدیریت دکمه شمارش اعضا
     application.add_handler(CallbackQueryHandler(handle_admin_callback, pattern='^admin_user_count$'))
 
     conv_handler = ConversationHandler(
@@ -463,7 +576,7 @@ def main() -> None:
         states={
             MENU_CHOICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_menu_choice)],
 
-            # حالت‌های دستیار پرامپ (۵ مرحله)
+            # حالت‌های دستیار پرامپ (متنی)
             PERSONA: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_persona)],
             MISSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mission)],
             CONTEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_context)],
@@ -472,6 +585,9 @@ def main() -> None:
             
             # حالت تأیید پرامپت (انتظار برای Callback)
             PROMPT_CONFIRMATION: [CallbackQueryHandler(handle_prompt_confirmation)],
+
+            # حالت تحلیل تصویر (چندرسانه‌ای)
+            IMAGE_PROMPT: [MessageHandler(filters.PHOTO | (filters.TEXT & ~filters.COMMAND), analyze_image)],
         },
 
         fallbacks=[CommandHandler('cancel', cancel), CommandHandler('start', start)],
@@ -480,10 +596,9 @@ def main() -> None:
     application.add_handler(conv_handler)
 
     print("ربات در حال اجرا است...")
+    # از allowed_updates استفاده می‌کنیم تا ربات فقط به پیام‌های مورد نیاز گوش دهد
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 
 if __name__ == '__main__':
-
     main()
-
