@@ -39,7 +39,7 @@ PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = r
 
 # --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
-OPENROUTER_API_KEY = os.environ.get("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", "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")
+OPENROUTER_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین
 try:
@@ -49,7 +49,7 @@ except ValueError:
 
 # --- ثابت‌های API ---
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-# مدل پیش‌فرض برای ساخت پرامپت (می‌توانید به مدل‌های دیگری مثل gpt-4o تغییر دهید)
+# مدل پیش‌فرض برای ساخت پرامپت 
 OPENROUTER_MODEL_TEXT = "x-ai/grok-4-fast" 
 SITE_URL = "https://t.me/jalil_jabari" 
 SITE_TITLE = "Jprompts Bot" 
@@ -235,7 +235,6 @@ async def handle_first_input(update: Update, context: CallbackContext) -> int:
             "**سوال ۱ از ۵: پرسونا (Persona) 🎭**\n"
             "هوش مصنوعی باید چه نقشی را ایفا کند؟ (مثلاً یک متخصص سئو، یک شاعر، یک برنامه‌نویس پایتون)"
         )
-        # reply_markup=None کیبورد قبلی را پنهان می‌کند (اما به دلیل ConversationHandler باید بازگردد)
         await update.message.reply_text(message, reply_markup=None) 
         # حالت بعدی برای دریافت پاسخ سوال ۱
         return MISSION 
