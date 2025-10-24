@@ -30,8 +30,8 @@ MENU_CHOICE = 6
 # ==============================================================================
 
 # --- کلیدهای محیطی (Render باید این متغیرها را تامین کند) ---
-TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "MISSING_TELEGRAM_TOKEN")
-OPENROUTER_API_KEY = os.environ.get("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", "MISSING_OPENROUTER_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
+OPENROUTER_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین (Admin Chat ID)
 # این را به صورت عددی در Render در متغیر محیطی ADMIN_CHAT_ID_RAW تنظیم کنید
@@ -486,3 +486,4 @@ def main() -> None:
 if __name__ == '__main__':
 
     main()
+
