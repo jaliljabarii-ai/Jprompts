@@ -24,16 +24,22 @@ logging.basicConfig(
 # ==============================================================================
 # --- ۱. تعریف حالت‌های مکالمه (States) ---
 # ==============================================================================
+# توالی حالات: 
+# PERSONA: انتظار برای فشردن دکمه شروع 
+# MISSION: انتظار برای پاسخ سوال ۱ (پرسونا)
+# CONTEXT: انتظار برای پاسخ سوال ۲ (مأموریت)
+# FORMAT_OUTPUT: انتظار برای پاسخ سوال ۳ (زمینه کار)
+# EXTRA_DETAILS: انتظار برای پاسخ سوال ۴ (فرمت خروجی)
+# PROMPT_CONFIRMATION: انتظار برای پاسخ سوال ۵ (جزئیات نهایی) و مدیریت Callback
 PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = range(6)
-# حالت‌های اضافی (MENU_CHOICE, IMAGE_PROMPT) حذف شدند.
 
 # ==============================================================================
-# --- ۲. تنظیمات و کلیدهای API ---
+# --- ۲. تنظیمات و کلیدهای API (برای محیط Render) ---
 # ==============================================================================
 
-# --- کلیدهای محیطی ---
+# --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
-OPENROUTER_API_KEY = os.environ.get("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", "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")
+OPENROUTER_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین
 try:
@@ -56,8 +62,6 @@ USER_IDS_FILE = "user_ids.txt"
 DEVELOPER_USERNAME = "@jalil_jabari"
 DEVELOPER_TEXT = "توسعه‌دهنده: "
 ADMIN_COUNT_BUTTON_TEXT = "📊 شمارش اعضا" 
-
-# دکمه‌ای که مکالمه را شروع می‌کند
 PROMPT_ASSISTANT_BUTTON = "🤖 شروع دستیار پرامپ‌نویسی"
 
 MAIN_MENU_KEYBOARD = [
@@ -106,9 +110,10 @@ async def call_ai_api(messages: list, api_key: str, model_name: str, context: Ca
             return "**خطا در پردازش پاسخ:** پاسخ معتبری از OpenRouter دریافت نشد."
 
     except httpx.HTTPStatusError as e:
+        logging.error(f"OpenRouter HTTP Error: {e}")
         status_code = e.response.status_code
         if status_code in [401, 402]:
-             return f"**خطا در API:** ارتباط با OpenRouter برقرار نشد. (کد خطا: {status_code})."
+             return f"**خطا در API:** ارتباط با OpenRouter برقرار نشد. (کد خطا: {status_code}). احتمالاً کلید API نامعتبر است."
         elif status_code == 400:
              return f"**خطا در درخواست:** درخواست شما نامعتبر بود (کد خطا: {status_code})."
         return f"**خطا در API:** ارتباط با OpenRouter برقرار نشد. (کد خطا: {status_code})."
@@ -136,8 +141,8 @@ def get_user_count() -> int:
 async def check_and_register_user(update: Update, context: CallbackContext) -> None:
     """بررسی و ثبت کاربر جدید و ارسال گزارش به ادمین."""
     user_id = str(update.effective_user.id)
-    # ... منطق ثبت نام و ارسال گزارش به ادمین (بدون تغییر) ...
-    # این تابع منطق ثبت کاربر را در فایل `user_ids.txt` حفظ می‌کند.
+    username = update.effective_user.username
+    first_name = update.effective_user.first_name
     
     registered_users = set()
     try:
@@ -159,8 +164,8 @@ async def check_and_register_user(update: Update, context: CallbackContext) -> N
 
             admin_message = (
                 "🔔 **کاربر جدید!**\n"
-                f"👤 یوزرنیم: @{update.effective_user.username if update.effective_user.username else 'ندارد'}\n"
-                f"🏷 نام: {update.effective_user.first_name if update.effective_user.first_name else 'ندارد'}\n"
+                f"👤 یوزرنیم: @{username if username else 'ندارد'}\n"
+                f"🏷 نام: {first_name if first_name else 'ندارد'}\n"
                 f"🆔 شناسه: `{user_id}`\n\n"
                 f"📊 **تعداد کل کاربران:** {new_count}"
             )
@@ -180,20 +185,19 @@ async def start(update: Update, context: CallbackContext) -> int:
     """شروع مکالمه و نمایش منو."""
     
     await check_and_register_user(update, context)
-    context.user_data.clear() # ریست کردن داده‌ها
+    context.user_data.clear() 
 
     inline_keyboard = [
         [InlineKeyboardButton(DEVELOPER_TEXT + DEVELOPER_USERNAME,
                               url=f"https://t.me/{DEVELOPER_USERNAME.lstrip('@')}")]
     ]
     
-    # دکمه ادمین
     if update.effective_user.id == ADMIN_CHAT_ID:
          inline_keyboard.append(
              [InlineKeyboardButton(ADMIN_COUNT_BUTTON_TEXT, callback_data='admin_user_count')]
          )
 
-    reply_markup = InlineKeyboardMarkup(inline_keyboard)
+    reply_markup_inline = InlineKeyboardMarkup(inline_keyboard)
 
     welcome_message = (
         "سلام! به ربات **Jprompts Bot** خوش آمدید. 👋\n\n"
@@ -205,7 +209,7 @@ async def start(update: Update, context: CallbackContext) -> int:
 
     await message_source.reply_text(
         welcome_message,
-        reply_markup=reply_markup
+        reply_markup=reply_markup_inline
     )
     
     await message_source.reply_text(
@@ -213,24 +217,29 @@ async def start(update: Update, context: CallbackContext) -> int:
         reply_markup=MAIN_MENU_MARKUP
     )
 
-    # پس از نمایش منو، باید منتظر انتخاب دکمه PROMPT_ASSISTANT_BUTTON باشیم.
-    return PERSONA # از این حالت برای دریافت ورودی دکمه اصلی استفاده می‌کنیم
+    # PERSONA: حالت اولیه برای دریافت ورودی دکمه "شروع دستیار پرامپ‌نویسی"
+    return PERSONA 
 
 
 async def handle_first_input(update: Update, context: CallbackContext) -> int:
-    """
-    مدیریت ورودی اولیه. اگر دکمه "شروع دستیار پرامپ‌نویسی" فشرده شده باشد،
-    مکالمه را به سوال اول هدایت می‌کند.
-    """
+    """مدیریت ورودی اولیه برای شروع توالی سوالات."""
     text = update.message.text
     
     if text == PROMPT_ASSISTANT_BUTTON:
-        # مستقیم وارد منطق شروع دستیار پرامپ‌نویسی می‌شویم
-        return await start_prompt_assistant_sequence(update, context)
+        # **توجه:** ReplyKeyboardMarkup را حذف می‌کنیم تا فقط ورودی متنی انتظار رود
+        context.user_data['prompt_data'] = {}
+        message = (
+            "**دستیار پرامپ‌نویسی (۵ سوال)**\n"
+            "برای لغو در هر زمان، /cancel را ارسال کنید.\n\n"
+            "**سوال ۱ از ۵: پرسونا (Persona) 🎭**\n"
+            "هوش مصنوعی باید چه نقشی را ایفا کند؟ (مثلاً یک متخصص سئو، یک شاعر، یک برنامه‌نویس پایتون)"
+        )
+        await update.message.reply_text(message, reply_markup=None) 
+        # حالت بعدی برای دریافت پاسخ سوال ۱
+        return MISSION 
     else:
-        # اگر کاربر چیزی غیر از دکمه ارسال کرد، او را راهنمایی می‌کنیم
         await update.message.reply_text("لطفاً از دکمه **'🤖 شروع دستیار پرامپ‌نویسی'** استفاده کنید.")
-        return PERSONA # در همین حالت می‌مانیم تا دکمه فشرده شود
+        return PERSONA # در همین حالت می‌مانیم
 
 
 async def cancel(update: Update, context: CallbackContext) -> int:
@@ -246,24 +255,8 @@ async def cancel(update: Update, context: CallbackContext) -> int:
 
 
 # ==============================================================================
-# --- ۵. توابع دستیار پرامپ‌نویسی (متن) ---
+# --- ۵. توابع دستیار پرامپ‌نویسی (توالی سوالات) ---
 # ==============================================================================
-
-async def start_prompt_assistant_sequence(update: Update, context: CallbackContext) -> int:
-    """شروع توالی سوالات با سوال اول (پرسونا)."""
-    message_source = update.message if update.message else update.effective_message
-    
-    context.user_data['prompt_data'] = {}
-    message = (
-        "**دستیار پرامپ‌نویسی (۵ سوال)**\n"
-        "برای لغو در هر زمان، /cancel را ارسال کنید.\n\n"
-        "**سوال ۱ از ۵: پرسونا (Persona) 🎭**\n"
-        "هوش مصنوعی باید چه نقشی را ایفا کند؟ (مثلاً یک متخصص سئو، یک شاعر، یک برنامه‌نویس پایتون)"
-    )
-    # **توجه:** ReplyKeyboardMarkup را حذف می‌کنیم تا فقط ورودی متنی انتظار رود
-    await message_source.reply_text(message, reply_markup=None) 
-    return MISSION # توجه: حالت بعدی برای دریافت پاسخ سوال ۱ است
-
 
 async def get_persona(update: Update, context: CallbackContext) -> int:
     """دریافت پاسخ سوال ۱ (پرسونا) و پرسیدن سوال ۲."""
@@ -271,7 +264,7 @@ async def get_persona(update: Update, context: CallbackContext) -> int:
     context.user_data['prompt_data']['persona'] = persona
     message = "**سوال ۲ از ۵: مأموریت (Mission) 🎯**\nمأموریت اصلی شما چیست؟ (چه خروجی‌ای می‌خواهید؟)"
     await update.message.reply_text(message)
-    return CONTEXT # توجه: حالت بعدی برای دریافت پاسخ سوال ۲ است
+    return CONTEXT
 
 
 async def get_mission(update: Update, context: CallbackContext) -> int:
@@ -280,7 +273,7 @@ async def get_mission(update: Update, context: CallbackContext) -> int:
     context.user_data['prompt_data']['mission'] = mission
     message = "**سوال ۳ از ۵: زمینه کار (Context) 📚**\nزمینه یا شرایط خاصی که باید در نظر گرفته شود؟ (مثلاً برای یک شرکت استارتاپی، یا برای یک مخاطب خاص)"
     await update.message.reply_text(message)
-    return FORMAT_OUTPUT # توجه: حالت بعدی برای دریافت پاسخ سوال ۳ است
+    return FORMAT_OUTPUT
 
 
 async def get_context(update: Update, context: CallbackContext) -> int:
@@ -289,7 +282,7 @@ async def get_context(update: Update, context: CallbackContext) -> int:
     context.user_data['prompt_data']['context'] = context_data
     message = "**سوال ۴ از ۵: فرمت خروجی (Output Format) 📄**\nفرمت خروجی را مشخص کنید. (مثلاً در قالب JSON، یک جدول مارک‌داون، یک مقاله ۵۰۰ کلمه‌ای)"
     await update.message.reply_text(message)
-    return EXTRA_DETAILS # توجه: حالت بعدی برای دریافت پاسخ سوال ۴ است
+    return EXTRA_DETAILS
 
 
 async def get_format_output(update: Update, context: CallbackContext) -> int:
@@ -298,7 +291,7 @@ async def get_format_output(update: Update, context: CallbackContext) -> int:
     context.user_data['prompt_data']['format_output'] = format_output
     message = "**سوال ۵ از ۵: توضیحات و جزئیات نهایی (Final Details) 💡**\nهرگونه توضیحات یا جزئیات نهایی که باید به پرامپت اضافه شود. (مثلاً محدودیت‌ها، لحن، یا مثال‌ها)"
     await update.message.reply_text(message)
-    return PROMPT_CONFIRMATION # توجه: حالت بعدی برای دریافت پاسخ سوال ۵ و رفتن به تأیید است
+    return PROMPT_CONFIRMATION
 
 
 async def generate_prompt(update: Update, context: CallbackContext) -> int:
@@ -347,12 +340,11 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
         reply_markup=reply_markup
     )
 
-    # در حالت PROMPT_CONFIRMATION می‌مانیم تا کاربر روی دکمه کلیک کند
-    return PROMPT_CONFIRMATION 
+    return PROMPT_CONFIRMATION
 
 
 async def handle_prompt_confirmation(update: Update, context: CallbackContext) -> int:
-    """مدیریت دکمه‌های تأیید پرامپت خلاقانه."""
+    """مدیریت دکمه‌های تأیید پرامپت خلاقانه و اجرای API."""
     query = update.callback_query
     await query.answer()
     
@@ -361,7 +353,6 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
     if query.data == 'confirm_restart':
         await query.message.edit_text("عملیات ساخت پرامپت لغو شد. 🔄")
         context.user_data.clear()
-        # شروع مجدد از منو
         return await start(update, context) 
 
     elif query.data == 'confirm_send':
@@ -436,8 +427,6 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> Non
 def main() -> None:
     """اجرای ربات."""
 
-    # ... بررسی کلیدها و تنظیمات (حذف شده برای خلاصه‌سازی) ...
-
     if TELEGRAM_BOT_TOKEN == "MISSING_TELEGRAM_TOKEN":
         print("❌ خطا: لطفاً متغیر محیطی 'TELEGRAM_BOT_TOKEN_RAW' را در Render تنظیم کنید.")
         return
@@ -451,19 +440,25 @@ def main() -> None:
         entry_points=[CommandHandler('start', start)],
 
         states={
-            # حالت اولیه: نمایش منو و انتظار برای کلیک روی دکمه "شروع"
+            # PERSONA: انتظار برای ورودی اولیه (فشردن دکمه)
             PERSONA: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_first_input)],
             
-            # توالی دریافت سوالات
+            # MISSION: دریافت پاسخ سوال ۱ (پرسونا)
             MISSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_persona)],
+            
+            # CONTEXT: دریافت پاسخ سوال ۲ (مأموریت)
             CONTEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mission)],
+            
+            # FORMAT_OUTPUT: دریافت پاسخ سوال ۳ (زمینه کار)
             FORMAT_OUTPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_context)],
+            
+            # EXTRA_DETAILS: دریافت پاسخ سوال ۴ (فرمت خروجی)
             EXTRA_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_output)], 
             
-            # حالت نهایی برای دریافت پاسخ سوال ۵ و نمایش دکمه‌های Inline
+            # PROMPT_CONFIRMATION: دریافت پاسخ سوال ۵ (جزئیات نهایی) و مدیریت Callback
             PROMPT_CONFIRMATION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, generate_prompt),
-                CallbackQueryHandler(handle_prompt_confirmation) # برای مدیریت دکمه‌های Inline
+                CallbackQueryHandler(handle_prompt_confirmation)
             ],
         },
 
