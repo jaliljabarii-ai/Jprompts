@@ -39,7 +39,7 @@ PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = r
 
 # --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
-OPENROUTER_API_KEY = os.environ.get("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", "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")
+OPENROUTER_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین
 try:
@@ -475,3 +475,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
