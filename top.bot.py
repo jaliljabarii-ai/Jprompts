@@ -11,7 +11,6 @@ from telegram.ext import (
 )
 import logging
 import os
-# --- تغییرات اصلی: حذف httpx و افزودن google-genai ---
 from google import genai
 from google.genai.errors import APIError
 import json
@@ -34,7 +33,6 @@ PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = r
 
 # --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
-# --- تغییر: استفاده از کلید API رسمی Gemini ---
 GEMINI_API_KEY = os.environ.get("AIzaSyCwMxeXRBovnYUwC2EMAg67pU-uv4Msbug", "AIzaSyCwMxeXRBovnYUwC2EMAg67pU-uv4Msbug")
 
 # شناسه چت ادمین
@@ -44,8 +42,9 @@ except ValueError:
     ADMIN_CHAT_ID = 0
 
 # --- ثابت‌های مدل Gemini ---
-# مدل پیش‌فرض برای ساخت پرامپت (مناسب برای کارهای سریع متنی)
-GEMINI_MODEL_TEXT = "gemini-2.5-flash" 
+# مدل پیش‌فرض: ارتقاء به Pro برای پایداری و کیفیت بهتر پرامپت
+GEMINI_MODEL_TEXT = "gemini-2.5-pro" 
+MAX_INPUT_LENGTH = 1500 # حداکثر 1500 کاراکتر برای هر ورودی کاربر (برای جلوگیری از خطای طول پیام)
 
 # --- ثابت‌های مدیریت کاربران ---
 USER_IDS_FILE = "user_ids.txt"
@@ -82,16 +81,12 @@ async def call_ai_api(messages: list, model_name: str, context: CallbackContext)
     if GEMINI_CLIENT is None:
         return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید Gemini API یافت نشد. لطفاً متغیر `GEMINI_API_KEY_RAW` را تنظیم کنید."
 
-    # تبدیل فرمت پیام‌ها (که از سینتکس OpenAI هستند) به فرمت Gemini
-    # در این مورد، چون فقط محتوای متنی ارسال می‌شود، تبدیل ساده است.
-    gemini_messages = [
-        {"role": "user", "parts": [msg["content"]]} 
-        if msg["role"] == "user" else 
-        {"role": "model", "parts": [msg["content"]]} 
-        for msg in messages
-    ]
-    # نکته: در مدل‌های چت Gemini، اولین پیام باید از نقش 'user' باشد.
-
+    # تبدیل فرمت پیام‌ها به فرمت مورد نیاز genai.Client
+    # توجه: کتابخانه genai.Client به صورت مستقیم از همان فرمت
+    # {"role": "user", "content": "..."} استفاده می کند
+    # اما اگر شامل تصاویر بود، باید به فرمت {"role": "user", "parts": [Part, ...]} تبدیل می شد.
+    # در اینجا چون فقط متن است، از همان فرمت ورودی استفاده می کنیم.
+    
     try:
         # فراخوانی API
         response = GEMINI_CLIENT.models.generate_content(
@@ -104,7 +99,9 @@ async def call_ai_api(messages: list, model_name: str, context: CallbackContext)
 
     except APIError as e:
         logging.error(f"Gemini API Error: {e}")
-        # APIError معمولاً شامل جزئیات بیشتری در مورد خطا است.
+        # مدیریت خطاهای رایج، از جمله خطای Message is too long
+        if "Message is too long" in str(e):
+             return "**خطا در API:** پرامپت نهایی شما بسیار طولانی است و از محدودیت ورودی مدل فراتر رفته است. لطفاً پرامپت را کوتاه‌تر کنید."
         return f"**خطا در API:** ارتباط با Gemini برقرار نشد. (جزئیات: {e})"
     except Exception as e:
         logging.error(f"Unknown API Error: {e}")
@@ -116,7 +113,7 @@ async def call_ai_api(messages: list, model_name: str, context: CallbackContext)
 # ==============================================================================
 
 def get_user_count() -> int:
-    # ... (بدون تغییر) ...
+    """خواندن تعداد کاربران ثبت شده از فایل."""
     if not os.path.exists(USER_IDS_FILE):
         return 0
     try:
@@ -128,7 +125,7 @@ def get_user_count() -> int:
 
 
 async def check_and_register_user(update: Update, context: CallbackContext) -> None:
-    # ... (بدون تغییر) ...
+    """بررسی و ثبت کاربر جدید و ارسال گزارش به ادمین."""
     user_id = str(update.effective_user.id)
     username = update.effective_user.username
     first_name = update.effective_user.first_name
@@ -168,8 +165,7 @@ async def check_and_register_user(update: Update, context: CallbackContext) -> N
 
         except Exception as e:
              logging.error(f"Failed to register user or send admin report: {e}")
-
-
+             
 async def start(update: Update, context: CallbackContext) -> int:
     """شروع مکالمه و نمایش منو."""
     
@@ -218,7 +214,7 @@ async def handle_first_input(update: Update, context: CallbackContext) -> int:
         message = (
             "**دستیار پرامپ‌نویسی (۵ سوال)**\n"
             "برای لغو در هر زمان، /cancel را ارسال کنید.\n\n"
-            "**سوال ۱ از ۵: پرسونا (Persona) 🎭**\n"
+            f"**سوال ۱ از ۵: پرسونا (Persona) 🎭** (حداکثر {MAX_INPUT_LENGTH} کاراکتر)\n"
             "هوش مصنوعی باید چه نقشی را ایفا کند؟ (مثلاً یک متخصص سئو، یک شاعر، یک برنامه‌نویس پایتون)"
         )
         await update.message.reply_text(message, reply_markup=None) 
@@ -244,11 +240,23 @@ async def cancel(update: Update, context: CallbackContext) -> int:
 # --- ۵. توابع دستیار پرامپ‌نویسی (توالی سوالات) ---
 # ==============================================================================
 
+def check_length(text: str, max_len: int = MAX_INPUT_LENGTH) -> bool:
+    """بررسی می کند که طول متن از حداکثر مجاز فراتر نرود."""
+    return len(text) <= max_len
+
 async def get_persona(update: Update, context: CallbackContext) -> int:
     """دریافت پاسخ سوال ۱ (پرسونا) و پرسیدن سوال ۲."""
     persona = update.message.text
+    
+    if not check_length(persona):
+        await update.message.reply_text(
+            f"❌ **خطا:** ورودی شما ({len(persona)} کاراکتر) بیش از حد طولانی است. "
+            f"لطفاً پاسخ خود را حداکثر به {MAX_INPUT_LENGTH} کاراکتر محدود کنید و دوباره ارسال نمایید."
+        )
+        return MISSION # در همین حالت می‌مانیم
+
     context.user_data['prompt_data']['persona'] = persona
-    message = "**سوال ۲ از ۵: مأموریت (Mission) 🎯**\nمأموریت اصلی شما چیست؟ (چه خروجی‌ای می‌خواهید؟)"
+    message = f"**سوال ۲ از ۵: مأموریت (Mission) 🎯** (حداکثر {MAX_INPUT_LENGTH} کاراکتر)\nمأموریت اصلی شما چیست؟ (چه خروجی‌ای می‌خواهید؟)"
     await update.message.reply_text(message)
     return CONTEXT
 
@@ -256,8 +264,16 @@ async def get_persona(update: Update, context: CallbackContext) -> int:
 async def get_mission(update: Update, context: CallbackContext) -> int:
     """دریافت پاسخ سوال ۲ (مأموریت) و پرسیدن سوال ۳."""
     mission = update.message.text
+    
+    if not check_length(mission):
+        await update.message.reply_text(
+            f"❌ **خطا:** ورودی شما ({len(mission)} کاراکتر) بیش از حد طولانی است. "
+            f"لطفاً پاسخ خود را حداکثر به {MAX_INPUT_LENGTH} کاراکتر محدود کنید و دوباره ارسال نمایید."
+        )
+        return CONTEXT # در همین حالت می‌مانیم
+
     context.user_data['prompt_data']['mission'] = mission
-    message = "**سوال ۳ از ۵: زمینه کار (Context) 📚**\nزمینه یا شرایط خاصی که باید در نظر گرفته شود؟ (مثلاً برای یک شرکت استارتاپی، یا برای یک مخاطب خاص)"
+    message = f"**سوال ۳ از ۵: زمینه کار (Context) 📚** (حداکثر {MAX_INPUT_LENGTH} کاراکتر)\nزمینه یا شرایط خاصی که باید در نظر گرفته شود؟ (مثلاً برای یک شرکت استارتاپی، یا برای یک مخاطب خاص)"
     await update.message.reply_text(message)
     return FORMAT_OUTPUT
 
@@ -265,8 +281,16 @@ async def get_mission(update: Update, context: CallbackContext) -> int:
 async def get_context(update: Update, context: CallbackContext) -> int:
     """دریافت پاسخ سوال ۳ (زمینه کار) و پرسیدن سوال ۴."""
     context_data = update.message.text
+    
+    if not check_length(context_data):
+        await update.message.reply_text(
+            f"❌ **خطا:** ورودی شما ({len(context_data)} کاراکتر) بیش از حد طولانی است. "
+            f"لطفاً پاسخ خود را حداکثر به {MAX_INPUT_LENGTH} کاراکتر محدود کنید و دوباره ارسال نمایید."
+        )
+        return FORMAT_OUTPUT # در همین حالت می‌مانیم
+
     context.user_data['prompt_data']['context'] = context_data
-    message = "**سوال ۴ از ۵: فرمت خروجی (Output Format) 📄**\nفرمت خروجی را مشخص کنید. (مثلاً در قالب JSON، یک جدول مارک‌داون، یک مقاله ۵۰۰ کلمه‌ای)"
+    message = f"**سوال ۴ از ۵: فرمت خروجی (Output Format) 📄** (حداکثر {MAX_INPUT_LENGTH} کاراکتر)\nفرمت خروجی را مشخص کنید. (مثلاً در قالب JSON، یک جدول مارک‌داون، یک مقاله ۵۰۰ کلمه‌ای)"
     await update.message.reply_text(message)
     return EXTRA_DETAILS
 
@@ -274,8 +298,16 @@ async def get_context(update: Update, context: CallbackContext) -> int:
 async def get_format_output(update: Update, context: CallbackContext) -> int:
     """دریافت پاسخ سوال ۴ (فرمت خروجی) و پرسیدن سوال ۵."""
     format_output = update.message.text
+    
+    if not check_length(format_output):
+        await update.message.reply_text(
+            f"❌ **خطا:** ورودی شما ({len(format_output)} کاراکتر) بیش از حد طولانی است. "
+            f"لطفاً پاسخ خود را حداکثر به {MAX_INPUT_LENGTH} کاراکتر محدود کنید و دوباره ارسال نمایید."
+        )
+        return EXTRA_DETAILS # در همین حالت می‌مانیم
+
     context.user_data['prompt_data']['format_output'] = format_output
-    message = "**سوال ۵ از ۵: توضیحات و جزئیات نهایی (Final Details) 💡**\nهرگونه توضیحات یا جزئیات نهایی که باید به پرامپت اضافه شود. (مثلاً محدودیت‌ها، لحن، یا مثال‌ها)"
+    message = f"**سوال ۵ از ۵: توضیحات و جزئیات نهایی (Final Details) 💡** (حداکثر {MAX_INPUT_LENGTH} کاراکتر)\nهرگونه توضیحات یا جزئیات نهایی که باید به پرامپت اضافه شود. (مثلاً محدودیت‌ها، لحن، یا مثال‌ها)"
     await update.message.reply_text(message)
     return PROMPT_CONFIRMATION
 
@@ -285,10 +317,18 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
     دریافت پاسخ سوال ۵ (جزئیات نهایی)، ساخت پرامپت و نمایش دکمه‌های تأیید.
     """
     extra_details = update.message.text
+    
+    if not check_length(extra_details):
+        await update.message.reply_text(
+            f"❌ **خطا:** ورودی شما ({len(extra_details)} کاراکتر) بیش از حد طولانی است. "
+            f"لطفاً پاسخ خود را حداکثر به {MAX_INPUT_LENGTH} کاراکتر محدود کنید و دوباره ارسال نمایید."
+        )
+        return PROMPT_CONFIRMATION # در همین حالت می‌مانیم
+
     context.user_data['prompt_data']['extra_details'] = extra_details
     data = context.user_data['prompt_data']
 
-    # --- ساختاردهی پرامپت داخلی ---
+    # --- ساختاردهی پرامپت داخلی (دستورالعمل‌های مدل) ---
     persian_details = (
         f"**پرسونا:** {data['persona']}.\n"
         f"**مأموریت:** {data['mission']}.\n"
@@ -299,9 +339,10 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
 
     # --- ساخت پرامپت نهایی برای Gemini ---
     final_prompt_to_gemini = (
-        "بر اساس جزئیات زیر، یک پرامپت خلاقانه، حرفه‌ای و بهینه برای یک مدل زبان بزرگ (مثل خودت) بساز. "
-        "پرامپت خروجی باید به صورت مستقیم، بدون هیچ مقدمه‌ای و در زبان فارسی ارائه شود. "
-        "پرامپت باید تمام سرفصل‌های داده شده را در خود جای دهد:\n\n"
+        "شما یک پرامپت‌نویس حرفه‌ای هوش مصنوعی هستید. بر اساس تمام جزئیات ورودی زیر، "
+        "یک پرامپت خلاقانه، حرفه‌ای، جامع و کاملاً بهینه برای یک مدل زبان بزرگ (مثل خودت) بساز. "
+        "پرامپت خروجی باید به صورت مستقیم، بدون هیچ مقدمه‌ای، پاراگراف اضافی یا توضیحی، و در زبان فارسی ارائه شود. "
+        "پرامپت نهایی باید در نهایت دقت، تمام سرفصل‌های داده شده را در خود جای دهد:\n\n"
         f"**سرفصل‌ها:**\n{persian_details}"
     )
     
@@ -353,7 +394,6 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
         try:
-            # فراخوانی تابع call_ai_api که اکنون Gemini را فراخوانی می‌کند
             creative_prompt_response = await call_ai_api(
                 messages=messages_to_ai, 
                 model_name=GEMINI_MODEL_TEXT,
@@ -392,7 +432,7 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
 # ==============================================================================
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> None:
-    # ... (بدون تغییر) ...
+    """مدیریت دکمه شمارش اعضا."""
     query = update.callback_query
     await query.answer()
 
@@ -418,9 +458,11 @@ def main() -> None:
         print("❌ خطا: لطفاً متغیر محیطی 'TELEGRAM_BOT_TOKEN_RAW' را در Render تنظیم کنید.")
         return
 
-    # !!! توجه: اگر client Gemini در خطوط بالا ساخته نشود، این اخطار نمایش داده می‌شود
-    if GEMINI_CLIENT is None:
-        print("❌ اخطار: کلاینت Gemini ساخته نشد. عملکرد AI غیرفعال خواهد بود. لطفاً GEMINI_API_KEY_RAW را تنظیم کنید.")
+    if GEMINI_CLIENT is None and GEMINI_API_KEY != "MISSING_GEMINI_KEY":
+        # اگر کلید هست ولی ساخت کلاینت ناموفق بوده است
+        print("❌ خطا: کلاینت Gemini ساخته نشد. لطفاً از صحت کلید API و نصب بودن 'google-genai' اطمینان حاصل کنید.")
+    elif GEMINI_CLIENT is None:
+        print("❌ اخطار: متغیر محیطی GEMINI_API_KEY_RAW تنظیم نشده است. ربات بدون اتصال به هوش مصنوعی شروع به کار خواهد کرد.")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -431,7 +473,6 @@ def main() -> None:
         entry_points=[CommandHandler('start', start)],
 
         states={
-            # ... (توالی حالت‌ها بدون تغییر) ...
             PERSONA: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_first_input)],
             MISSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_persona)],
             CONTEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mission)],
@@ -453,8 +494,4 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-    # این بخش باید اطمینان حاصل کند که کتابخانه google-genai نصب شده است
-    if GEMINI_API_KEY == "MISSING_GEMINI_KEY" and 'GEMINI_API_KEY_RAW' not in os.environ:
-         print("!! اخطار: متغیر محیطی GEMINI_API_KEY_RAW تنظیم نشده است. ربات بدون اتصال به هوش مصنوعی شروع به کار خواهد کرد.")
-         
     main()
