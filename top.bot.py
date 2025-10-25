@@ -11,7 +11,9 @@ from telegram.ext import (
 )
 import logging
 import os
-import httpx 
+# --- تغییرات اصلی: حذف httpx و افزودن google-genai ---
+from google import genai
+from google.genai.errors import APIError
 import json
 
 # ==============================================================================
@@ -24,22 +26,16 @@ logging.basicConfig(
 # ==============================================================================
 # --- ۱. تعریف حالت‌های مکالمه (States) ---
 # ==============================================================================
-# توالی حالات: 
-# PERSONA: انتظار برای فشردن دکمه شروع 
-# MISSION: انتظار برای پاسخ سوال ۱ (پرسونا)
-# CONTEXT: انتظار برای پاسخ سوال ۲ (مأموریت)
-# FORMAT_OUTPUT: انتظار برای پاسخ سوال ۳ (زمینه کار)
-# EXTRA_DETAILS: انتظار برای پاسخ سوال ۴ (فرمت خروجی)
-# PROMPT_CONFIRMATION: انتظار برای پاسخ سوال ۵ (جزئیات نهایی) و مدیریت Callback
 PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = range(6)
 
 # ==============================================================================
-# --- ۲. تنظیمات و کلیدهای API (برای محیط Render) ---
+# --- ۲. تنظیمات و کلیدهای API (برای محیط Gemini) ---
 # ==============================================================================
 
 # --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
-OPENROUTER_API_KEY = os.environ.get("42ef10646e3d4d6c81eda0d3053c812c", "42ef10646e3d4d6c81eda0d3053c812c")
+# --- تغییر: استفاده از کلید API رسمی Gemini ---
+GEMINI_API_KEY = os.environ.get("AIzaSyCwMxeXRBovnYUwC2EMAg67pU-uv4Msbug", "AIzaSyCwMxeXRBovnYUwC2EMAg67pU-uv4Msbug")
 
 # شناسه چت ادمین
 try:
@@ -47,12 +43,9 @@ try:
 except ValueError:
     ADMIN_CHAT_ID = 0
 
-# --- ثابت‌های API ---
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
-# مدل پیش‌فرض برای ساخت پرامپت 
-OPENROUTER_MODEL_TEXT = "x-ai/grok-4-fast" 
-SITE_URL = "https://t.me/jalil_jabari" 
-SITE_TITLE = "Jprompts Bot" 
+# --- ثابت‌های مدل Gemini ---
+# مدل پیش‌فرض برای ساخت پرامپت (مناسب برای کارهای سریع متنی)
+GEMINI_MODEL_TEXT = "gemini-2.5-flash" 
 
 # --- ثابت‌های مدیریت کاربران ---
 USER_IDS_FILE = "user_ids.txt"
@@ -64,60 +57,55 @@ DEVELOPER_TEXT = "توسعه‌دهنده: "
 ADMIN_COUNT_BUTTON_TEXT = "📊 شمارش اعضا" 
 PROMPT_ASSISTANT_BUTTON = "🤖 شروع دستیار پرامپ‌نویسی"
 
-# کیبورد اصلی
 MAIN_MENU_KEYBOARD = [
     [KeyboardButton(PROMPT_ASSISTANT_BUTTON)], 
 ]
 MAIN_MENU_MARKUP = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, one_time_keyboard=False, resize_keyboard=True)
+
+# --- تنظیم کلاینت Gemini در خارج از توابع ---
+GEMINI_CLIENT = None
+if GEMINI_API_KEY != "MISSING_GEMINI_KEY":
+    try:
+        GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception as e:
+        logging.error(f"Failed to initialize Gemini Client: {e}")
+        GEMINI_CLIENT = None
 
 
 # ==============================================================================
 # --- ۳. توابع هسته هوش مصنوعی (AI Core) ---
 # ==============================================================================
 
-async def call_ai_api(messages: list, api_key: str, model_name: str, context: CallbackContext) -> str:
-    """فراخوانی OpenRouter API با httpx."""
-    if api_key == "MISSING_OPENROUTER_KEY": 
-        return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید OpenRouter یافت نشد."
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": SITE_URL,
-        "X-Title": SITE_TITLE,
-    }
+async def call_ai_api(messages: list, model_name: str, context: CallbackContext) -> str:
+    """فراخوانی API رسمی Gemini."""
     
-    data = {
-        "model": model_name,
-        "messages": messages,
-        "max_tokens": 2048,
-    }
+    if GEMINI_CLIENT is None:
+        return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید Gemini API یافت نشد. لطفاً متغیر `GEMINI_API_KEY_RAW` را تنظیم کنید."
+
+    # تبدیل فرمت پیام‌ها (که از سینتکس OpenAI هستند) به فرمت Gemini
+    # در این مورد، چون فقط محتوای متنی ارسال می‌شود، تبدیل ساده است.
+    gemini_messages = [
+        {"role": "user", "parts": [msg["content"]]} 
+        if msg["role"] == "user" else 
+        {"role": "model", "parts": [msg["content"]]} 
+        for msg in messages
+    ]
+    # نکته: در مدل‌های چت Gemini، اولین پیام باید از نقش 'user' باشد.
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                url=OPENROUTER_BASE_URL,
-                headers=headers,
-                json=data, 
-            )
-
-        response.raise_for_status() 
+        # فراخوانی API
+        response = GEMINI_CLIENT.models.generate_content(
+            model=model_name,
+            contents=messages,
+            config={"max_output_tokens": 2048},
+        )
         
-        response_json = response.json()
-        if response_json.get('choices') and response_json['choices'][0]['message']['content']:
-            return response_json['choices'][0]['message']['content']
-        else:
-            logging.error(f"OpenRouter empty response: {response_json}")
-            return "**خطا در پردازش پاسخ:** پاسخ معتبری از OpenRouter دریافت نشد."
+        return response.text
 
-    except httpx.HTTPStatusError as e:
-        logging.error(f"OpenRouter HTTP Error: {e}")
-        status_code = e.response.status_code
-        if status_code in [401, 402]:
-             return f"**خطا در API:** ارتباط با OpenRouter برقرار نشد. (کد خطا: {status_code}). احتمالاً کلید API نامعتبر است."
-        elif status_code == 400:
-             return f"**خطا در درخواست:** درخواست شما نامعتبر بود (کد خطا: {status_code})."
-        return f"**خطا در API:** ارتباط با OpenRouter برقرار نشد. (کد خطا: {status_code})."
+    except APIError as e:
+        logging.error(f"Gemini API Error: {e}")
+        # APIError معمولاً شامل جزئیات بیشتری در مورد خطا است.
+        return f"**خطا در API:** ارتباط با Gemini برقرار نشد. (جزئیات: {e})"
     except Exception as e:
         logging.error(f"Unknown API Error: {e}")
         return f"**خطای ناشناخته:** در اجرای پرامپت خطایی رخ داد: {e}"
@@ -128,7 +116,7 @@ async def call_ai_api(messages: list, api_key: str, model_name: str, context: Ca
 # ==============================================================================
 
 def get_user_count() -> int:
-    """خواندن تعداد کاربران ثبت شده از فایل."""
+    # ... (بدون تغییر) ...
     if not os.path.exists(USER_IDS_FILE):
         return 0
     try:
@@ -140,7 +128,7 @@ def get_user_count() -> int:
 
 
 async def check_and_register_user(update: Update, context: CallbackContext) -> None:
-    """بررسی و ثبت کاربر جدید و ارسال گزارش به ادمین."""
+    # ... (بدون تغییر) ...
     user_id = str(update.effective_user.id)
     username = update.effective_user.username
     first_name = update.effective_user.first_name
@@ -180,7 +168,7 @@ async def check_and_register_user(update: Update, context: CallbackContext) -> N
 
         except Exception as e:
              logging.error(f"Failed to register user or send admin report: {e}")
-             
+
 
 async def start(update: Update, context: CallbackContext) -> int:
     """شروع مکالمه و نمایش منو."""
@@ -218,7 +206,6 @@ async def start(update: Update, context: CallbackContext) -> int:
         reply_markup=MAIN_MENU_MARKUP
     )
 
-    # PERSONA: حالت اولیه برای دریافت ورودی دکمه "شروع دستیار پرامپ‌نویسی"
     return PERSONA 
 
 
@@ -227,7 +214,6 @@ async def handle_first_input(update: Update, context: CallbackContext) -> int:
     text = update.message.text
     
     if text == PROMPT_ASSISTANT_BUTTON:
-        # پاک کردن کیبورد و شروع سوال ۱
         context.user_data['prompt_data'] = {}
         message = (
             "**دستیار پرامپ‌نویسی (۵ سوال)**\n"
@@ -236,11 +222,10 @@ async def handle_first_input(update: Update, context: CallbackContext) -> int:
             "هوش مصنوعی باید چه نقشی را ایفا کند؟ (مثلاً یک متخصص سئو، یک شاعر، یک برنامه‌نویس پایتون)"
         )
         await update.message.reply_text(message, reply_markup=None) 
-        # حالت بعدی برای دریافت پاسخ سوال ۱
         return MISSION 
     else:
         await update.message.reply_text("لطفاً از دکمه **'🤖 شروع دستیار پرامپ‌نویسی'** استفاده کنید.")
-        return PERSONA # در همین حالت می‌مانیم
+        return PERSONA
 
 
 async def cancel(update: Update, context: CallbackContext) -> int:
@@ -312,15 +297,16 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
         f"**جزئیات نهایی:** {data['extra_details']}."
     )
 
-    # --- ساخت پرامپت نهایی برای Grok-4 ---
-    final_prompt_to_grok = (
+    # --- ساخت پرامپت نهایی برای Gemini ---
+    final_prompt_to_gemini = (
         "بر اساس جزئیات زیر، یک پرامپت خلاقانه، حرفه‌ای و بهینه برای یک مدل زبان بزرگ (مثل خودت) بساز. "
         "پرامپت خروجی باید به صورت مستقیم، بدون هیچ مقدمه‌ای و در زبان فارسی ارائه شود. "
         "پرامپت باید تمام سرفصل‌های داده شده را در خود جای دهد:\n\n"
         f"**سرفصل‌ها:**\n{persian_details}"
     )
     
-    messages = [{"role": "user", "content": final_prompt_to_grok}]
+    # پیام در فرمت OpenAI برای سازگاری با توابع داخلی
+    messages = [{"role": "user", "content": final_prompt_to_gemini}]
     context.user_data['messages_to_ai'] = messages
 
     await update.message.reply_text(
@@ -363,14 +349,14 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
             await query.message.edit_text("خطا: پرامپت نهایی پیدا نشد. لطفاً از ابتدا شروع کنید.")
             return await start(update, context)
 
-        await query.message.edit_text(f"... **در حال ارسال به {OPENROUTER_MODEL_TEXT} برای ساخت پرامپت خلاقانه** ... ⏳")
+        await query.message.edit_text(f"... **در حال ارسال به {GEMINI_MODEL_TEXT} برای ساخت پرامپت خلاقانه** ... ⏳")
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
         try:
+            # فراخوانی تابع call_ai_api که اکنون Gemini را فراخوانی می‌کند
             creative_prompt_response = await call_ai_api(
                 messages=messages_to_ai, 
-                api_key=OPENROUTER_API_KEY,
-                model_name=OPENROUTER_MODEL_TEXT,
+                model_name=GEMINI_MODEL_TEXT,
                 context=context
             )
             
@@ -406,7 +392,7 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
 # ==============================================================================
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> None:
-    """مدیریت دکمه شمارش اعضا."""
+    # ... (بدون تغییر) ...
     query = update.callback_query
     await query.answer()
 
@@ -432,6 +418,10 @@ def main() -> None:
         print("❌ خطا: لطفاً متغیر محیطی 'TELEGRAM_BOT_TOKEN_RAW' را در Render تنظیم کنید.")
         return
 
+    # !!! توجه: اگر client Gemini در خطوط بالا ساخته نشود، این اخطار نمایش داده می‌شود
+    if GEMINI_CLIENT is None:
+        print("❌ اخطار: کلاینت Gemini ساخته نشد. عملکرد AI غیرفعال خواهد بود. لطفاً GEMINI_API_KEY_RAW را تنظیم کنید.")
+
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CallbackQueryHandler(handle_prompt_confirmation, pattern='^confirm_'))
@@ -441,29 +431,18 @@ def main() -> None:
         entry_points=[CommandHandler('start', start)],
 
         states={
-            # PERSONA: انتظار برای ورودی اولیه (فشردن دکمه)
+            # ... (توالی حالت‌ها بدون تغییر) ...
             PERSONA: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_first_input)],
-            
-            # MISSION: دریافت پاسخ سوال ۱ (پرسونا)
             MISSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_persona)],
-            
-            # CONTEXT: دریافت پاسخ سوال ۲ (مأموریت)
             CONTEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mission)],
-            
-            # FORMAT_OUTPUT: دریافت پاسخ سوال ۳ (زمینه کار)
             FORMAT_OUTPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_context)],
-            
-            # EXTRA_DETAILS: دریافت پاسخ سوال ۴ (فرمت خروجی)
             EXTRA_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_output)], 
-            
-            # PROMPT_CONFIRMATION: دریافت پاسخ سوال ۵ (جزئیات نهایی) و مدیریت Callback
             PROMPT_CONFIRMATION: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, generate_prompt),
                 CallbackQueryHandler(handle_prompt_confirmation)
             ],
         },
 
-        # Fallbacks: مدیریت دستورات /cancel و /start در هر مرحله
         fallbacks=[CommandHandler('cancel', cancel), CommandHandler('start', start)],
     )
 
@@ -474,6 +453,8 @@ def main() -> None:
 
 
 if __name__ == '__main__':
+    # این بخش باید اطمینان حاصل کند که کتابخانه google-genai نصب شده است
+    if GEMINI_API_KEY == "MISSING_GEMINI_KEY" and 'GEMINI_API_KEY_RAW' not in os.environ:
+         print("!! اخطار: متغیر محیطی GEMINI_API_KEY_RAW تنظیم نشده است. ربات بدون اتصال به هوش مصنوعی شروع به کار خواهد کرد.")
+         
     main()
-
-
