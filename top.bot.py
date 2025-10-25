@@ -32,7 +32,7 @@ PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = r
 
 # --- کلیدهای محیطی ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo", "8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo")
-OPENAI_API_KEY = os.environ.get("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", "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")
+OPENAI_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین
 try:
@@ -526,3 +526,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
