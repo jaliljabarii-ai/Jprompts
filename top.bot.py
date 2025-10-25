@@ -32,19 +32,21 @@ PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = r
 # ==============================================================================
 
 # --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
-TELEGRAM_BOT_TOKEN = os.environ.get("8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo","8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo")
+TELEGRAM_BOT_TOKEN = os.environ.get("8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo", "8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo")
 GEMINI_API_KEY = os.environ.get("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiMjk3MDE2OWEtNDI2NS00NTJjLTg3MjQtNzExM2QwZjhlYzlhIiwidHlwZSI6ImFwaV90b2tlbiIsIm5hbWUiOiJ0b3Bib3QiLCJpc19jdXN0b20iOnRydWV9.VYzkwWn2_dONk0XZ0U9555JNPH4HX0ubANL5b0fmfWo", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX2lkIjoiMjk3MDE2OWEtNDI2NS00NTJjLTg3MjQtNzExM2QwZjhlYzlhIiwidHlwZSI6ImFwaV90b2tlbiIsIm5hbWUiOiJ0b3Bib3QiLCJpc19jdXN0b20iOnRydWV9.VYzkwWn2_dONk0XZ0U9555JNPH4HX0ubANL5b0fmfWo")
 
 # شناسه چت ادمین
 try:
+    # حتماً این متغیر را در محیط Render تنظیم کنید
     ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID_RAW", 0))
 except ValueError:
     ADMIN_CHAT_ID = 0
 
 # --- ثابت‌های مدل Gemini ---
-# مدل پیش‌فرض: ارتقاء به Pro برای پایداری و کیفیت بهتر پرامپت
+# مدل ارتقاء یافته
 GEMINI_MODEL_TEXT = "gemini-2.5-pro" 
-MAX_INPUT_LENGTH = 1500 # حداکثر 1500 کاراکتر برای هر ورودی کاربر (برای جلوگیری از خطای طول پیام)
+# حداکثر کاراکتر مجاز برای هر ورودی کاربر (برای جلوگیری از خطای طول پیام)
+MAX_INPUT_LENGTH = 1500 
 
 # --- ثابت‌های مدیریت کاربران ---
 USER_IDS_FILE = "user_ids.txt"
@@ -80,26 +82,25 @@ async def call_ai_api(messages: list, model_name: str, context: CallbackContext)
     
     if GEMINI_CLIENT is None:
         return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید Gemini API یافت نشد. لطفاً متغیر `GEMINI_API_KEY_RAW` را تنظیم کنید."
-
-    # تبدیل فرمت پیام‌ها به فرمت مورد نیاز genai.Client
-    # توجه: کتابخانه genai.Client به صورت مستقیم از همان فرمت
-    # {"role": "user", "content": "..."} استفاده می کند
-    # اما اگر شامل تصاویر بود، باید به فرمت {"role": "user", "parts": [Part, ...]} تبدیل می شد.
-    # در اینجا چون فقط متن است، از همان فرمت ورودی استفاده می کنیم.
     
     try:
         # فراخوانی API
         response = GEMINI_CLIENT.models.generate_content(
             model=model_name,
-            contents=messages,
+            # پیام‌ها در فرمت استاندارد library gemini
+            contents=messages, 
             config={"max_output_tokens": 2048},
         )
         
+        # بررسی پاسخ‌های خالی احتمالی
+        if not response.text:
+             return "**خطا در پردازش پاسخ:** پاسخ معتبری از مدل Gemini دریافت نشد."
+             
         return response.text
 
     except APIError as e:
         logging.error(f"Gemini API Error: {e}")
-        # مدیریت خطاهای رایج، از جمله خطای Message is too long
+        # مدیریت خطای طول پیام
         if "Message is too long" in str(e):
              return "**خطا در API:** پرامپت نهایی شما بسیار طولانی است و از محدودیت ورودی مدل فراتر رفته است. لطفاً پرامپت را کوتاه‌تر کنید."
         return f"**خطا در API:** ارتباط با Gemini برقرار نشد. (جزئیات: {e})"
@@ -346,7 +347,7 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
         f"**سرفصل‌ها:**\n{persian_details}"
     )
     
-    # پیام در فرمت OpenAI برای سازگاری با توابع داخلی
+    # پیام در فرمت مورد نیاز کتابخانه genai.Client
     messages = [{"role": "user", "content": final_prompt_to_gemini}]
     context.user_data['messages_to_ai'] = messages
 
@@ -428,7 +429,7 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
 
 
 # ==============================================================================
-# --- ۶. توابع مدیریت ادمین ---
+# --- ۶. توابع مدیریت ادمین و خطا ---
 # ==============================================================================
 
 async def handle_admin_callback(update: Update, context: CallbackContext) -> None:
@@ -446,6 +447,41 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> Non
             f"📊 **آمار کاربران:**\nتعداد کل کاربران ثبت شده: **{user_count}**",
             parse_mode='Markdown'
         )
+
+async def error_handler(update: object, context: CallbackContext) -> None:
+    """مدیریت خطاهای غیرمنتظره و ارسال گزارش به ادمین."""
+    
+    # ثبت خطا در لاگ سرور
+    logging.error(f"Update '{update}' caused error '{context.error}'")
+    
+    # اگر ADMIN_CHAT_ID تنظیم شده، خطا را برای شما ارسال کند
+    if ADMIN_CHAT_ID:
+        error_message = (
+            "🚨 **خطای جدی در ربات!** 🚨\n"
+            f"❌ خطا: `{context.error}`\n"
+            f"🆔 چت: `{update.effective_chat.id if isinstance(update, Update) and update.effective_chat else 'ناشناس'}`"
+        )
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID, 
+                text=error_message, 
+                parse_mode='Markdown'
+            )
+        except Exception as e:
+            logging.error(f"Failed to send error alert to admin: {e}")
+
+    # (اختیاری) پیام عمومی به کاربر
+    if isinstance(update, Update) and update.effective_chat:
+        try:
+            await context.bot.send_message(
+                chat_id=update.effective_chat.id, 
+                text="متأسفانه یک خطای داخلی رخ داد. لطفاً /start را ارسال کنید تا دوباره شروع کنیم. 🙏",
+                reply_markup=MAIN_MENU_MARKUP
+            )
+        except Exception:
+             # اگر ارسال پیام به کاربر هم شکست خورد، نادیده می‌گیریم
+            pass 
+
 
 # ==============================================================================
 # --- ۷. تابع اصلی (Main) ---
@@ -465,6 +501,9 @@ def main() -> None:
         print("❌ اخطار: متغیر محیطی GEMINI_API_KEY_RAW تنظیم نشده است. ربات بدون اتصال به هوش مصنوعی شروع به کار خواهد کرد.")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
+    
+    # --- افزودن Error Handler برای مدیریت خطاهای کلی ---
+    application.add_error_handler(error_handler) 
 
     application.add_handler(CallbackQueryHandler(handle_prompt_confirmation, pattern='^confirm_'))
     application.add_handler(CallbackQueryHandler(handle_admin_callback, pattern='^admin_user_count$'))
@@ -474,11 +513,13 @@ def main() -> None:
 
         states={
             PERSONA: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_first_input)],
+            # اضافه شدن بررسی طول پیام در این توابع
             MISSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_persona)],
             CONTEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mission)],
             FORMAT_OUTPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_context)],
             EXTRA_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_output)], 
             PROMPT_CONFIRMATION: [
+                # اضافه شدن بررسی طول پیام در این تابع
                 MessageHandler(filters.TEXT & ~filters.COMMAND, generate_prompt),
                 CallbackQueryHandler(handle_prompt_confirmation)
             ],
@@ -495,6 +536,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
-
-
