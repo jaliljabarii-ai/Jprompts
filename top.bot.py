@@ -32,7 +32,7 @@ PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = r
 # ==============================================================================
 
 # --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
-TELEGRAM_BOT_TOKEN = os.environ.get("8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc", "8211274452:AAE7H8VqzQYS-BAKsxkGmW5Y2BxBPEa7ldc")
+TELEGRAM_BOT_TOKEN = os.environ.get("8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo","8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo")
 GEMINI_API_KEY = os.environ.get("AIzaSyCwMxeXRBovnYUwC2EMAg67pU-uv4Msbug", "AIzaSyCwMxeXRBovnYUwC2EMAg67pU-uv4Msbug")
 
 # شناسه چت ادمین
@@ -495,3 +495,4 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
+
