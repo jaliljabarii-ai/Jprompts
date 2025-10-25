@@ -11,8 +11,7 @@ from telegram.ext import (
 )
 import logging
 import os
-from google import genai
-from google.genai.errors import APIError
+from openai import AsyncOpenAI, APIError
 import json
 
 # ==============================================================================
@@ -28,25 +27,22 @@ logging.basicConfig(
 PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = range(6)
 
 # ==============================================================================
-# --- ۲. تنظیمات و کلیدهای API (برای محیط Gemini) ---
+# --- ۲. تنظیمات و کلیدهای API (برای محیط OpenAI) ---
 # ==============================================================================
 
-# --- کلیدهای محیطی (از Environment Variables خوانده می‌شوند) ---
+# --- کلیدهای محیطی ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo", "8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo")
-GEMINI_API_KEY = os.environ.get("AIzaSyBawyaCZgdQzgCqAimReWZ5XmZRuG0Z9ro", "AIzaSyBawyaCZgdQzgCqAimReWZ5XmZRuG0Z9ro")
+OPENAI_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین
 try:
-    # حتماً این متغیر را در محیط Render تنظیم کنید
     ADMIN_CHAT_ID = int(os.environ.get("ADMIN_CHAT_ID_RAW", 0))
 except ValueError:
     ADMIN_CHAT_ID = 0
 
-# --- ثابت‌های مدل Gemini ---
-# مدل ارتقاء یافته
-GEMINI_MODEL_TEXT = "gemini-2.5-pro" 
-# حداکثر کاراکتر مجاز برای هر ورودی کاربر (برای جلوگیری از خطای طول پیام)
-MAX_INPUT_LENGTH = 1500 
+# --- ثابت‌های مدل OpenAI ---
+GPT_MODEL_TEXT = "gpt-4o" 
+MAX_INPUT_LENGTH = 1500 # حداکثر کاراکتر مجاز برای هر ورودی کاربر 
 
 # --- ثابت‌های مدیریت کاربران ---
 USER_IDS_FILE = "user_ids.txt"
@@ -63,14 +59,14 @@ MAIN_MENU_KEYBOARD = [
 ]
 MAIN_MENU_MARKUP = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, one_time_keyboard=False, resize_keyboard=True)
 
-# --- تنظیم کلاینت Gemini در خارج از توابع ---
-GEMINI_CLIENT = None
-if GEMINI_API_KEY != "MISSING_GEMINI_KEY":
+# --- تنظیم کلاینت OpenAI ناهمگام (Async) ---
+OPENAI_CLIENT = None
+if OPENAI_API_KEY != "MISSING_OPENAI_KEY":
     try:
-        GEMINI_CLIENT = genai.Client(api_key=GEMINI_API_KEY)
+        OPENAI_CLIENT = AsyncOpenAI(api_key=OPENAI_API_KEY)
     except Exception as e:
-        logging.error(f"Failed to initialize Gemini Client: {e}")
-        GEMINI_CLIENT = None
+        logging.error(f"Failed to initialize OpenAI Client: {e}")
+        OPENAI_CLIENT = None
 
 
 # ==============================================================================
@@ -78,32 +74,35 @@ if GEMINI_API_KEY != "MISSING_GEMINI_KEY":
 # ==============================================================================
 
 async def call_ai_api(messages: list, model_name: str, context: CallbackContext) -> str:
-    """فراخوانی API رسمی Gemini."""
+    """فراخوانی API ناهمگام OpenAI (GPT)."""
     
-    if GEMINI_CLIENT is None:
-        return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید Gemini API یافت نشد. لطفاً متغیر `GEMINI_API_KEY_RAW` را تنظیم کنید."
-    
+    if OPENAI_CLIENT is None:
+        return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید OpenAI API یافت نشد. لطفاً متغیر `OPENAI_API_KEY_RAW` را تنظیم کنید."
+
     try:
-        # فراخوانی API
-        response = GEMINI_CLIENT.models.generate_content(
+        # فراخوانی API چت با متد ناهمگام
+        response = await OPENAI_CLIENT.chat.completions.create(
             model=model_name,
-            # پیام‌ها در فرمت استاندارد library gemini
-            contents=messages, 
-            config={"max_output_tokens": 2048},
+            messages=messages, 
+            max_tokens=2048,
         )
         
-        # بررسی پاسخ‌های خالی احتمالی
-        if not response.text:
-             return "**خطا در پردازش پاسخ:** پاسخ معتبری از مدل Gemini دریافت نشد."
-             
-        return response.text
+        if response.choices and response.choices[0].message.content:
+            return response.choices[0].message.content
+        else:
+            return "**خطا در پردازش پاسخ:** پاسخ معتبری از مدل GPT دریافت نشد."
 
     except APIError as e:
-        logging.error(f"Gemini API Error: {e}")
+        logging.error(f"OpenAI API Error: {e}")
+        
+        if e.status_code in [401, 403]:
+             return f"**خطا در احراز هویت (401/403):** کلید API نامعتبر است یا دسترسی مسدود شده است. (جزئیات: {e})"
         # مدیریت خطای طول پیام
-        if "Message is too long" in str(e):
-             return "**خطا در API:** پرامپت نهایی شما بسیار طولانی است و از محدودیت ورودی مدل فراتر رفته است. لطفاً پرامپت را کوتاه‌تر کنید."
-        return f"**خطا در API:** ارتباط با Gemini برقرار نشد. (جزئیات: {e})"
+        if "maximum context length" in str(e):
+             return "**خطا در طول پیام:** پرامپت نهایی شما بسیار طولانی است و از محدودیت ورودی مدل فراتر رفته است. لطفاً ورودی‌های خود را در مرحله دستیار پرامپ‌نویسی کوتاه‌تر کنید."
+        
+        return f"**خطا در API:** ارتباط با OpenAI برقرار نشد. (جزئیات: {e})"
+        
     except Exception as e:
         logging.error(f"Unknown API Error: {e}")
         return f"**خطای ناشناخته:** در اجرای پرامپت خطایی رخ داد: {e}"
@@ -316,6 +315,7 @@ async def get_format_output(update: Update, context: CallbackContext) -> int:
 async def generate_prompt(update: Update, context: CallbackContext) -> int:
     """
     دریافت پاسخ سوال ۵ (جزئیات نهایی)، ساخت پرامپت و نمایش دکمه‌های تأیید.
+    ***توجه: دستورالعمل‌های داخلی برای جلوگیری از خطای طولانی بودن پیام کوتاه شده‌اند.***
     """
     extra_details = update.message.text
     
@@ -338,17 +338,15 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
         f"**جزئیات نهایی:** {data['extra_details']}."
     )
 
-    # --- ساخت پرامپت نهایی برای Gemini ---
-    final_prompt_to_gemini = (
-        "شما یک پرامپت‌نویس حرفه‌ای هوش مصنوعی هستید. بر اساس تمام جزئیات ورودی زیر، "
-        "یک پرامپت خلاقانه، حرفه‌ای، جامع و کاملاً بهینه برای یک مدل زبان بزرگ (مثل خودت) بساز. "
-        "پرامپت خروجی باید به صورت مستقیم، بدون هیچ مقدمه‌ای، پاراگراف اضافی یا توضیحی، و در زبان فارسی ارائه شود. "
-        "پرامپت نهایی باید در نهایت دقت، تمام سرفصل‌های داده شده را در خود جای دهد:\n\n"
+    # --- ساخت پرامپت نهایی برای GPT-4o (نسخه کوتاه شده و بهینه) ---
+    final_prompt_to_gpt = (
+        "نقش شما پرامپت‌نویس حرفه‌ای است. بر اساس جزئیات زیر، یک پرامپت جامع و بهینه برای GPT-4o در فارسی بسازید. "
+        "پرامپت خروجی باید کاملاً مستقیم، بدون مقدمه و با پوشش تمام جزئیات داده شده باشد:\n\n"
         f"**سرفصل‌ها:**\n{persian_details}"
     )
     
-    # پیام در فرمت مورد نیاز کتابخانه genai.Client
-    messages = [{"role": "user", "content": final_prompt_to_gemini}]
+    # پیام در فرمت استاندارد OpenAI: {"role": "user", "content": "..."}
+    messages = [{"role": "user", "content": final_prompt_to_gpt}]
     context.user_data['messages_to_ai'] = messages
 
     await update.message.reply_text(
@@ -359,7 +357,7 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
     )
 
     keyboard = [
-        [InlineKeyboardButton("✅ تأیید و ارسال به AI", callback_data='confirm_send')],
+        [InlineKeyboardButton("✅ تأیید و ارسال به GPT-4o", callback_data='confirm_send')],
         [InlineKeyboardButton("❌ شروع مجدد دستیار پرامپ‌نویسی", callback_data='confirm_restart')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -391,19 +389,19 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
             await query.message.edit_text("خطا: پرامپت نهایی پیدا نشد. لطفاً از ابتدا شروع کنید.")
             return await start(update, context)
 
-        await query.message.edit_text(f"... **در حال ارسال به {GEMINI_MODEL_TEXT} برای ساخت پرامپت خلاقانه** ... ⏳")
+        await query.message.edit_text(f"... **در حال ارسال به {GPT_MODEL_TEXT} برای ساخت پرامپت خلاقانه** ... ⏳")
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
         try:
             creative_prompt_response = await call_ai_api(
                 messages=messages_to_ai, 
-                model_name=GEMINI_MODEL_TEXT,
+                model_name=GPT_MODEL_TEXT,
                 context=context
             )
             
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"**پرامپت خلاقانه ساخته شده توسط هوش مصنوعی:**\n\n`{creative_prompt_response}`",
+                text=f"**پرامپت خلاقانه ساخته شده توسط هوش مصنوعی ({GPT_MODEL_TEXT}):**\n\n`{creative_prompt_response}`",
                 parse_mode='Markdown'
             )
             
@@ -451,10 +449,8 @@ async def handle_admin_callback(update: Update, context: CallbackContext) -> Non
 async def error_handler(update: object, context: CallbackContext) -> None:
     """مدیریت خطاهای غیرمنتظره و ارسال گزارش به ادمین."""
     
-    # ثبت خطا در لاگ سرور
     logging.error(f"Update '{update}' caused error '{context.error}'")
     
-    # اگر ADMIN_CHAT_ID تنظیم شده، خطا را برای شما ارسال کند
     if ADMIN_CHAT_ID:
         error_message = (
             "🚨 **خطای جدی در ربات!** 🚨\n"
@@ -470,7 +466,6 @@ async def error_handler(update: object, context: CallbackContext) -> None:
         except Exception as e:
             logging.error(f"Failed to send error alert to admin: {e}")
 
-    # (اختیاری) پیام عمومی به کاربر
     if isinstance(update, Update) and update.effective_chat:
         try:
             await context.bot.send_message(
@@ -479,7 +474,6 @@ async def error_handler(update: object, context: CallbackContext) -> None:
                 reply_markup=MAIN_MENU_MARKUP
             )
         except Exception:
-             # اگر ارسال پیام به کاربر هم شکست خورد، نادیده می‌گیریم
             pass 
 
 
@@ -494,15 +488,13 @@ def main() -> None:
         print("❌ خطا: لطفاً متغیر محیطی 'TELEGRAM_BOT_TOKEN_RAW' را در Render تنظیم کنید.")
         return
 
-    if GEMINI_CLIENT is None and GEMINI_API_KEY != "MISSING_GEMINI_KEY":
-        # اگر کلید هست ولی ساخت کلاینت ناموفق بوده است
-        print("❌ خطا: کلاینت Gemini ساخته نشد. لطفاً از صحت کلید API و نصب بودن 'google-genai' اطمینان حاصل کنید.")
-    elif GEMINI_CLIENT is None:
-        print("❌ اخطار: متغیر محیطی GEMINI_API_KEY_RAW تنظیم نشده است. ربات بدون اتصال به هوش مصنوعی شروع به کار خواهد کرد.")
+    if OPENAI_CLIENT is None and OPENAI_API_KEY != "MISSING_OPENAI_KEY":
+        print("❌ خطا: کلاینت OpenAI ساخته نشد. لطفاً از صحت کلید API و نصب بودن 'openai' اطمینان حاصل کنید.")
+    elif OPENAI_CLIENT is None:
+        print("❌ اخطار: متغیر محیطی OPENAI_API_KEY_RAW تنظیم نشده است. ربات بدون اتصال به هوش مصنوعی شروع به کار خواهد کرد.")
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    # --- افزودن Error Handler برای مدیریت خطاهای کلی ---
     application.add_error_handler(error_handler) 
 
     application.add_handler(CallbackQueryHandler(handle_prompt_confirmation, pattern='^confirm_'))
@@ -513,13 +505,11 @@ def main() -> None:
 
         states={
             PERSONA: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_first_input)],
-            # اضافه شدن بررسی طول پیام در این توابع
             MISSION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_persona)],
             CONTEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_mission)],
             FORMAT_OUTPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_context)],
             EXTRA_DETAILS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_format_output)], 
             PROMPT_CONFIRMATION: [
-                # اضافه شدن بررسی طول پیام در این تابع
                 MessageHandler(filters.TEXT & ~filters.COMMAND, generate_prompt),
                 CallbackQueryHandler(handle_prompt_confirmation)
             ],
@@ -536,4 +526,3 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
