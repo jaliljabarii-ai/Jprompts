@@ -11,7 +11,7 @@ from telegram.ext import (
 )
 import logging
 import os
-from openai import AsyncOpenAI, APIError
+import httpx # جایگزین requests برای عملیات ناهمگام (Async)
 import json
 
 # ==============================================================================
@@ -27,12 +27,13 @@ logging.basicConfig(
 PERSONA, MISSION, CONTEXT, FORMAT_OUTPUT, EXTRA_DETAILS, PROMPT_CONFIRMATION = range(6)
 
 # ==============================================================================
-# --- ۲. تنظیمات و کلیدهای API (برای محیط OpenAI) ---
+# --- ۲. تنظیمات و کلیدهای API (برای محیط OpenRouter) ---
 # ==============================================================================
 
 # --- کلیدهای محیطی ---
 TELEGRAM_BOT_TOKEN = os.environ.get("8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo", "8293849771:AAFuKBcwhSKn6h8OzEScoTWo5_OGAgwruuo")
-OPENAI_API_KEY = os.environ.get("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", "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")
+# --- تغییر: کلید OpenRouter ---
+OPENROUTER_API_KEY = os.environ.get("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", "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")
 
 # شناسه چت ادمین
 try:
@@ -40,9 +41,11 @@ try:
 except ValueError:
     ADMIN_CHAT_ID = 0
 
-# --- ثابت‌های مدل OpenAI ---
-GPT_MODEL_TEXT = "gpt-4o" 
-MAX_INPUT_LENGTH = 1500 # حداکثر کاراکتر مجاز برای هر ورودی کاربر 
+# --- ثابت‌های مدل OpenRouter ---
+# مدل پیش‌فرض (مدل رایگان و سریع برای تست)
+ROUTER_MODEL_TEXT = "mistralai/mistral-7b-instruct:free" 
+ROUTER_API_URL = "https://openrouter.ai/api/v1/chat/completions"
+MAX_INPUT_LENGTH = 1500 
 
 # --- ثابت‌های مدیریت کاربران ---
 USER_IDS_FILE = "user_ids.txt"
@@ -59,14 +62,9 @@ MAIN_MENU_KEYBOARD = [
 ]
 MAIN_MENU_MARKUP = ReplyKeyboardMarkup(MAIN_MENU_KEYBOARD, one_time_keyboard=False, resize_keyboard=True)
 
-# --- تنظیم کلاینت OpenAI ناهمگام (Async) ---
-OPENAI_CLIENT = None
-if OPENAI_API_KEY != "MISSING_OPENAI_KEY":
-    try:
-        OPENAI_CLIENT = AsyncOpenAI(api_key=OPENAI_API_KEY)
-    except Exception as e:
-        logging.error(f"Failed to initialize OpenAI Client: {e}")
-        OPENAI_CLIENT = None
+# --- تنظیم کلاینت httpx ناهمگام (Async) در خارج از توابع ---
+# از AsyncClient برای بهینه‌سازی استفاده می‌کنیم
+HTTPX_CLIENT = httpx.AsyncClient(timeout=60.0) 
 
 
 # ==============================================================================
@@ -74,34 +72,50 @@ if OPENAI_API_KEY != "MISSING_OPENAI_KEY":
 # ==============================================================================
 
 async def call_ai_api(messages: list, model_name: str, context: CallbackContext) -> str:
-    """فراخوانی API ناهمگام OpenAI (GPT)."""
+    """فراخوانی API ناهمگام OpenRouter با استفاده از httpx."""
     
-    if OPENAI_CLIENT is None:
-        return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید OpenAI API یافت نشد. لطفاً متغیر `OPENAI_API_KEY_RAW` را تنظیم کنید."
+    if OPENROUTER_API_KEY == "MISSING_OPENROUTER_KEY":
+        return f"**[پاسخ شبیه‌سازی شده]**\n\nکلید OpenRouter API یافت نشد. لطفاً متغیر `OPENROUTER_API_KEY_RAW` را تنظیم کنید."
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        # این دو فیلد برای رتبه‌بندی در OpenRouter استفاده می‌شوند
+        "HTTP-Referer": "https://github.com/jaliljabarii-ai/Jprompts", 
+        "X-Title": "Jprompts Telegram Bot",
+    }
+    
+    # ساخت بدنه JSON درخواست
+    payload = json.dumps({
+        "model": model_name,
+        "messages": messages, 
+    })
 
     try:
-        # فراخوانی API چت با متد ناهمگام
-        response = await OPENAI_CLIENT.chat.completions.create(
-            model=model_name,
-            messages=messages, 
-            max_tokens=2048,
-        )
+        # ارسال درخواست POST ناهمگام
+        response = await HTTPX_CLIENT.post(ROUTER_API_URL, headers=headers, content=payload)
         
-        if response.choices and response.choices[0].message.content:
-            return response.choices[0].message.content
+        # بررسی کد وضعیت HTTP
+        response.raise_for_status() 
+        
+        # تحلیل پاسخ JSON
+        data = response.json()
+        
+        # استخراج محتوای پیام تولید شده (ساختار مشابه OpenAI)
+        if data.get("choices") and data["choices"][0].get("message") and data["choices"][0]["message"].get("content"):
+            return data["choices"][0]["message"]["content"]
         else:
-            return "**خطا در پردازش پاسخ:** پاسخ معتبری از مدل GPT دریافت نشد."
+            logging.error(f"OpenRouter empty response: {data}")
+            return "**خطا در پردازش پاسخ:** پاسخ معتبری از مدل OpenRouter دریافت نشد. (احتمالاً مدل رایگان بیش از حد شلوغ است.)"
 
-    except APIError as e:
-        logging.error(f"OpenAI API Error: {e}")
-        
-        if e.status_code in [401, 403]:
-             return f"**خطا در احراز هویت (401/403):** کلید API نامعتبر است یا دسترسی مسدود شده است. (جزئیات: {e})"
-        # مدیریت خطای طول پیام
-        if "maximum context length" in str(e):
-             return "**خطا در طول پیام:** پرامپت نهایی شما بسیار طولانی است و از محدودیت ورودی مدل فراتر رفته است. لطفاً ورودی‌های خود را در مرحله دستیار پرامپ‌نویسی کوتاه‌تر کنید."
-        
-        return f"**خطا در API:** ارتباط با OpenAI برقرار نشد. (جزئیات: {e})"
+    except httpx.HTTPStatusError as e:
+        # مدیریت خطاهای API (مثل 401 Unauthorized, 400 Bad Request)
+        logging.error(f"HTTP Error: {e.response.status_code} - {e.response.text}")
+        if e.response.status_code == 401:
+             return "**خطا در احراز هویت (401):** کلید OpenRouter API نامعتبر است."
+        if e.response.status_code == 400 and "context length" in e.response.text:
+             return "**خطا در طول پیام:** پرامپت نهایی شما بیش از حد طولانی است."
+        return f"**خطا در API:** ارتباط با OpenRouter برقرار نشد. کد: {e.response.status_code}"
         
     except Exception as e:
         logging.error(f"Unknown API Error: {e}")
@@ -315,7 +329,6 @@ async def get_format_output(update: Update, context: CallbackContext) -> int:
 async def generate_prompt(update: Update, context: CallbackContext) -> int:
     """
     دریافت پاسخ سوال ۵ (جزئیات نهایی)، ساخت پرامپت و نمایش دکمه‌های تأیید.
-    ***توجه: دستورالعمل‌های داخلی برای جلوگیری از خطای طولانی بودن پیام کوتاه شده‌اند.***
     """
     extra_details = update.message.text
     
@@ -338,15 +351,16 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
         f"**جزئیات نهایی:** {data['extra_details']}."
     )
 
-    # --- ساخت پرامپت نهایی برای GPT-4o (نسخه کوتاه شده و بهینه) ---
-    final_prompt_to_gpt = (
-        "نقش شما پرامپت‌نویس حرفه‌ای است. بر اساس جزئیات زیر، یک پرامپت جامع و بهینه برای GPT-4o در فارسی بسازید. "
+    # --- ساخت پرامپت نهایی برای OpenRouter ---
+    # این دستورالعمل کوتاه و بهینه است
+    final_prompt_to_router = (
+        "نقش شما پرامپت‌نویس حرفه‌ای است. بر اساس جزئیات زیر، یک پرامپت جامع و بهینه برای یک مدل زبان بزرگ (LLM) در فارسی بسازید. "
         "پرامپت خروجی باید کاملاً مستقیم، بدون مقدمه و با پوشش تمام جزئیات داده شده باشد:\n\n"
         f"**سرفصل‌ها:**\n{persian_details}"
     )
     
-    # پیام در فرمت استاندارد OpenAI: {"role": "user", "content": "..."}
-    messages = [{"role": "user", "content": final_prompt_to_gpt}]
+    # پیام در فرمت استاندارد: {"role": "user", "content": "..."}
+    messages = [{"role": "user", "content": final_prompt_to_router}]
     context.user_data['messages_to_ai'] = messages
 
     await update.message.reply_text(
@@ -357,7 +371,7 @@ async def generate_prompt(update: Update, context: CallbackContext) -> int:
     )
 
     keyboard = [
-        [InlineKeyboardButton("✅ تأیید و ارسال به GPT-4o", callback_data='confirm_send')],
+        [InlineKeyboardButton(f"✅ تأیید و ارسال به {ROUTER_MODEL_TEXT}", callback_data='confirm_send')],
         [InlineKeyboardButton("❌ شروع مجدد دستیار پرامپ‌نویسی", callback_data='confirm_restart')]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -389,19 +403,19 @@ async def handle_prompt_confirmation(update: Update, context: CallbackContext) -
             await query.message.edit_text("خطا: پرامپت نهایی پیدا نشد. لطفاً از ابتدا شروع کنید.")
             return await start(update, context)
 
-        await query.message.edit_text(f"... **در حال ارسال به {GPT_MODEL_TEXT} برای ساخت پرامپت خلاقانه** ... ⏳")
+        await query.message.edit_text(f"... **در حال ارسال به {ROUTER_MODEL_TEXT} برای ساخت پرامپت خلاقانه** ... ⏳")
         await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
         try:
             creative_prompt_response = await call_ai_api(
                 messages=messages_to_ai, 
-                model_name=GPT_MODEL_TEXT,
+                model_name=ROUTER_MODEL_TEXT,
                 context=context
             )
             
             await context.bot.send_message(
                 chat_id=chat_id,
-                text=f"**پرامپت خلاقانه ساخته شده توسط هوش مصنوعی ({GPT_MODEL_TEXT}):**\n\n`{creative_prompt_response}`",
+                text=f"**پرامپت خلاقانه ساخته شده توسط هوش مصنوعی ({ROUTER_MODEL_TEXT}):**\n\n`{creative_prompt_response}`",
                 parse_mode='Markdown'
             )
             
@@ -488,11 +502,6 @@ def main() -> None:
         print("❌ خطا: لطفاً متغیر محیطی 'TELEGRAM_BOT_TOKEN_RAW' را در Render تنظیم کنید.")
         return
 
-    if OPENAI_CLIENT is None and OPENAI_API_KEY != "MISSING_OPENAI_KEY":
-        print("❌ خطا: کلاینت OpenAI ساخته نشد. لطفاً از صحت کلید API و نصب بودن 'openai' اطمینان حاصل کنید.")
-    elif OPENAI_CLIENT is None:
-        print("❌ اخطار: متغیر محیطی OPENAI_API_KEY_RAW تنظیم نشده است. ربات بدون اتصال به هوش مصنوعی شروع به کار خواهد کرد.")
-
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     application.add_error_handler(error_handler) 
@@ -526,4 +535,9 @@ def main() -> None:
 
 if __name__ == '__main__':
     main()
-
+    # پس از اتمام main، کلاینت httpx را ببندید
+    try:
+        if HTTPX_CLIENT:
+            HTTPX_CLIENT.close()
+    except Exception as e:
+         logging.warning(f"Failed to close httpx client: {e}")
